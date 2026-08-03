@@ -1,0 +1,143 @@
+# GENERATED FILE - DO NOT EDIT.
+#
+# Produced by CMake from current_config.cfg.in.  To change a value, edit the
+# corresponding cache variable in CMakeLists.txt (or pass it at configure
+# time, e.g. -DAUX2_PIN0_MODE=13) and re-run cmake.
+#
+# Each line is a `<name> <value>` pair in the same format the diagnostic
+# protocol's `conf set` takes, so this file also works with:
+#
+#     moteus_tool -t @MOTEUS_CONTROLLER_ID@ --write-config current_config.cfg
+#
+# Every key here was verified to exist on the attached board with
+# `moteus_tool --dump-config`.  This board exposes aux2 only -- it has no
+# aux1.* configuration keys at all -- so nothing below references aux1.
+#
+# EVERY peripheral on the port is set explicitly, including the ones being
+# left disabled.  This is deliberate: a peripheral left at a stale value can
+# claim pins that another one needs, which makes the port fail validation.
+# That is exactly what `aux2.uart.mode 5` did -- it held the UART pins while
+# SPI wanted them, so aux2 reported `error.uart_pin_error` and spi.active
+# stayed False.  Setting each mode explicitly keeps that from recurring.
+#
+# Pin modes:  0 NC   1 SPI   2 SPI_CS   3 UART   4 SW_QUAD   5 HW_QUAD
+#             6 HALL   7 INDEX   8 SINE   9 COSINE   13 I2C   14 DIN
+#             15 DOUT   16 AIN   17 PWM_OUT
+# Pin pulls:  0 none   1 pull-up   2 pull-down
+# SPI modes:  0 onboard AS5047P   1 disabled   2 AS5047P   3 iC-PZ
+#             4 MA732   5 MA600   8 AMT22   9 RLS Orbis
+# UART modes: 0 disabled   1 RLS AksIM-2   2 tunnel   3 debug
+#             4 CUI AMT21x RS422   5 fdcanusb serial
+
+# --- Pins -------------------------------------------------------------
+# Pins 0-2 are CLK/MISO/MOSI, pin 3 is chip select for the MA600.
+aux2.pins.0.mode @AUX2_PIN0_MODE@
+aux2.pins.0.pull @AUX2_PIN0_PULL@
+aux2.pins.1.mode @AUX2_PIN1_MODE@
+aux2.pins.1.pull @AUX2_PIN1_PULL@
+aux2.pins.2.mode @AUX2_PIN2_MODE@
+aux2.pins.2.pull @AUX2_PIN2_PULL@
+aux2.pins.3.mode @AUX2_PIN3_MODE@
+aux2.pins.3.pull @AUX2_PIN3_PULL@
+aux2.pins.4.mode @AUX2_PIN4_MODE@
+aux2.pins.4.pull @AUX2_PIN4_PULL@
+
+# --- SPI --------------------------------------------------------------
+# The MA600 will not hold the 12MHz default over the breakout cable.
+aux2.spi.mode @AUX2_SPI_MODE@
+aux2.spi.rate_hz @AUX2_SPI_RATE_HZ@
+aux2.spi.filter_us @AUX2_SPI_FILTER_US@
+aux2.spi.bct @AUX2_SPI_BCT@
+aux2.spi.trim @AUX2_SPI_TRIM@
+
+# --- UART -------------------------------------------------------------
+# Must stay 0 while the SPI pins above are in use; mode 5 is what caused
+# the uart_pin_error.
+aux2.uart.mode @AUX2_UART_MODE@
+aux2.uart.baud_rate @AUX2_UART_BAUD_RATE@
+aux2.uart.poll_rate_us @AUX2_UART_POLL_RATE_US@
+aux2.uart.cui_amt21_address @AUX2_UART_CUI_AMT21_ADDRESS@
+aux2.rs422 @AUX2_RS422@
+
+# --- I2C --------------------------------------------------------------
+# This firmware has no aux2.i2c.i2c_hz or .pullup key; rate is per-device.
+# Device types: 0 disabled/none.  Leave disabled while SPI owns the pins.
+aux2.i2c_startup_delay_ms @AUX2_I2C_STARTUP_DELAY_MS@
+aux2.i2c.devices.0.type @AUX2_I2C_DEV0_TYPE@
+aux2.i2c.devices.0.address @AUX2_I2C_DEV0_ADDRESS@
+aux2.i2c.devices.0.poll_rate_us @AUX2_I2C_DEV0_POLL_RATE_US@
+aux2.i2c.devices.1.type @AUX2_I2C_DEV1_TYPE@
+aux2.i2c.devices.1.address @AUX2_I2C_DEV1_ADDRESS@
+aux2.i2c.devices.1.poll_rate_us @AUX2_I2C_DEV1_POLL_RATE_US@
+aux2.i2c.devices.2.type @AUX2_I2C_DEV2_TYPE@
+aux2.i2c.devices.2.address @AUX2_I2C_DEV2_ADDRESS@
+aux2.i2c.devices.2.poll_rate_us @AUX2_I2C_DEV2_POLL_RATE_US@
+
+# --- Other peripherals ------------------------------------------------
+# All disabled, but set explicitly so none can silently claim a pin.
+aux2.quadrature.enabled @AUX2_QUADRATURE_ENABLED@
+aux2.quadrature.cpr @AUX2_QUADRATURE_CPR@
+aux2.hall.enabled @AUX2_HALL_ENABLED@
+aux2.hall.polarity @AUX2_HALL_POLARITY@
+aux2.index.enabled @AUX2_INDEX_ENABLED@
+aux2.index.invert @AUX2_INDEX_INVERT@
+aux2.sine_cosine.enabled @AUX2_SINE_COSINE_ENABLED@
+aux2.sine_cosine.common @AUX2_SINE_COSINE_COMMON@
+aux2.pwm_input.enabled @AUX2_PWM_INPUT_ENABLED@
+aux2.pwm_period_us @AUX2_PWM_PERIOD_US@
+aux2.bissc.enabled @AUX2_BISSC_ENABLED@
+aux2.bissc.rate_hz @AUX2_BISSC_RATE_HZ@
+aux2.bissc.data_bits @AUX2_BISSC_DATA_BITS@
+aux2.bissc.crc_bits @AUX2_BISSC_CRC_BITS@
+aux2.bissc.poll_rate_us @AUX2_BISSC_POLL_RATE_US@
+
+# --- Encoder source ---------------------------------------------------
+# The pins above wire up the bus; these make the firmware read from it.
+# Types: 0 disabled, 1 SPI, 2 UART, 3 quadrature, 4 hall, 5 index,
+#        6 sine/cosine, 7 I2C.
+motor_position.sources.0.aux_number @SOURCE0_AUX_NUMBER@
+motor_position.sources.0.type @SOURCE0_TYPE@
+motor_position.sources.0.cpr @SOURCE0_CPR@
+motor_position.sources.0.offset @SOURCE0_OFFSET@
+motor_position.sources.0.sign @SOURCE0_SIGN@
+motor_position.sources.0.reference @SOURCE0_REFERENCE@
+motor_position.sources.0.pll_filter_hz @SOURCE0_PLL_FILTER_HZ@
+
+# 0-based indices into the source list above.
+motor_position.commutation_source @COMMUTATION_SOURCE@
+motor_position.output.source @OUTPUT_SOURCE@
+
+# --- Gearbox ----------------------------------------------------------
+# Output turns per rotor turn.  A reducer is < 1 (4x reduction = 0.25);
+# 1.0 is a direct drive.  A value > 1.0 faults unless
+# rotor_to_output_override is set, which guards against a mistyped ratio.
+#
+# Set this BEFORE tuning servo.pid_position: the PID gains are in physical
+# units at the OUTPUT, i.e. after this scaling, so changing the ratio later
+# silently changes what those gains mean.
+motor_position.rotor_to_output_ratio @ROTOR_TO_OUTPUT_RATIO@
+
+# --- Safety limits ----------------------------------------------------
+# Bounds on position-mode travel, in output rotations.  nan disables a
+# bound.  Starting outside the range faults; leaving it during operation
+# means no torque is applied to travel further out.
+servopos.position_min @SERVOPOS_POSITION_MIN@
+servopos.position_max @SERVOPOS_POSITION_MAX@
+
+# Maximum phase current, i.e. the torque ceiling regardless of what any
+# command asks for.  RAISING THIS ABOVE THE FACTORY VALUE CAN DAMAGE THE
+# HARDWARE -- the controller's own rating applies even if the motor is
+# rated higher.  Set it from whichever of the two is lower.
+servo.max_current_A @SERVO_MAX_CURRENT_A@
+
+# Speed past which output power is cut back -- a backstop, not a
+# trajectory limit.
+servo.max_velocity @SERVO_MAX_VELOCITY@
+
+# Trajectory limits used to REACH a target, in output rev/s and rev/s^2.
+# Bare boards ship with both unset, and with neither set the firmware
+# takes commands immediately: velocity changes instantaneously and "may
+# grow to arbitrary magnitude".  They are set here so the first position
+# command ramps instead of slamming to target.  nan unsets either one.
+servo.default_velocity_limit @SERVO_DEFAULT_VELOCITY_LIMIT@
+servo.default_accel_limit @SERVO_DEFAULT_ACCEL_LIMIT@

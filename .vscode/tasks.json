@@ -1,0 +1,43 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "cmake: build moteus_driver",
+            "command": "cmake",
+            "args": ["--build", "build", "--target", "moteus_driver"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": ["$gcc"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": "Build the driver via CMake (a single-file gcc task cannot resolve moteus.h)."
+        },
+        {
+            "type": "shell",
+            "label": "cmake: configure",
+            "command": "cmake",
+            "args": ["-S", ".", "-B", "build"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "detail": "Regenerate the build directory."
+        },
+        {
+            "type": "shell",
+            "label": "ctest: run tests",
+            "command": "ctest",
+            "args": ["--test-dir", "build", "--output-on-failure"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "group": "test",
+            "detail": "Run the moteus library unit tests."
+        }
+    ]
+}
