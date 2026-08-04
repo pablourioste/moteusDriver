@@ -21,7 +21,8 @@ it. Do not try to reimplement the inner loops here — you cannot beat 30 kHz ov
 | **Build the system step by step** | [`docs/2D_model/INTEGRATION.md`](docs/2D_model/INTEGRATION.md) |
 | Bring up new hardware (wiring, encoder, calibration) | [`docs/2D_model/driver+encoder/SETUP.md`](docs/2D_model/driver+encoder/SETUP.md) |
 | Measure inertia / compute LQR gains / go 3D | [`docs/3d_scaling/README.md`](docs/3d_scaling/README.md) |
-| Work on the IMU specifically | [`docs/2D_model/IMU_BLUEPRINT.md`](docs/2D_model/IMU_BLUEPRINT.md) |
+| **Wire, test and calibrate the IMU** | [`docs/2D_model/IMU_SETUP.md`](docs/2D_model/IMU_SETUP.md) |
+| Understand the IMU design decisions | [`docs/2D_model/IMU_BLUEPRINT.md`](docs/2D_model/IMU_BLUEPRINT.md) |
 | Read a moteus calibration log | [`data/calibration/README.md`](data/calibration/README.md) |
 
 ---

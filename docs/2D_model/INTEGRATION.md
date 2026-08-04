@@ -372,6 +372,11 @@ to prevent.
 
 *Depends on: H2 (IMU wired), H3 (rails verified).*
 
+> **📋 Step-by-step procedure: [IMU_SETUP.md](IMU_SETUP.md).** It walks the wiring,
+> the `CHIP_ID` test, the blob upload, the gravity check, both calibrations and the
+> soak test, with a tick-box at every stage. The rest of this section is the summary
+> and the porting notes.
+
 **What ports unchanged.** In `src/drivers/ImuDriver.cpp` only four things are Linux:
 `writeRegister` (77-80), `readRegisters` (82-89), `SleepMicroseconds` (46-51),
 `MonotonicSeconds` (53-58). The blob upload state machine (91-178), init sequence
