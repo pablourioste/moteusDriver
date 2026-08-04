@@ -19,17 +19,219 @@ Linux I2C — the IMU runs on the microcontroller.
 
 | Need | Note |
 |---|---|
-| Teensy 4.1 + USB cable | |
+| Teensy 4.1 + USB cable | A **data** cable — many charge-only cables look identical |
 | BMI270 breakout, **3.3 V** | SPI pins exposed: SCK, SDI, SDO, CSB |
 | Jumper wires, short | At 10 MHz, long leads cause flaky reads |
 | Multimeter | For step 1. Not optional |
-| PlatformIO installed | `pio --version`. VS Code extension or CLI — **not** the Arduino IDE |
 | Flat, level surface | For calibration |
+
+PlatformIO is **not** assumed — Step 0 installs it.
 
 ```
   ⚠  Neither the Teensy nor the BMI270 is 5 V tolerant.  Both have a 3.6 V
      absolute maximum on every pin.  A 5 V wire destroys them.
 ```
+
+---
+
+# STEP 0 — Talk to the Teensy
+
+**Do this with the IMU disconnected.** Before debugging a sensor you must be able to
+build code, flash it, and read output back. Otherwise a failure at Step 2 is ambiguous:
+dead IMU, or code that never ran?
+
+## 0.1 — Where to build vs. where to flash (WSL2)
+
+This repo lives in WSL2, and that matters for one specific reason:
+
+> **Teensy flashing re-enumerates the USB device.** The board reboots into its HalfKay
+> bootloader, which is a *different* USB device — VID:PID `16C0:0478` — from the running
+> sketch (`16C0:0483`). A `usbipd` attachment is bound to one device, so it **drops on
+> every upload**. You would re-attach dozens of times a session.
+
+The clean split — **same `platformio.ini`, both sides**:
+
+| Task | Where | Command |
+|---|---|---|
+| **Build** | WSL2 | `pio run -e teensy41` |
+| **Flash** | **Windows** | `pio run -e teensy41 -t upload` |
+| **Serial monitor** | **Windows** | `pio device monitor` |
+
+Building in WSL keeps the fast native filesystem and the same shell as your `cmake`
+build. Flashing from Windows sidesteps usbipd entirely.
+
+Windows sees the WSL repo directly — no second clone:
+
+```
+\\wsl$\Ubuntu\home\pablo_urioste\projects\moteusDriver
+```
+
+> **This matters more later.** Step S3 of [INTEGRATION.md](INTEGRATION.md) has you
+> running `moteus_tool` over the fdcanusb *while* the Teensy listens on CAN. Under
+> pure-WSL that is two simultaneous usbipd attachments, one dropping on every upload.
+> Flashing from Windows removes that whole class of problem.
+
+**Pure-WSL is possible** if you prefer one environment: `usbipd attach --wsl --busid X-Y`
+before each upload, plus udev rules for non-root access (WSL has none installed by
+default). It works — it is just friction on every cycle.
+
+## 0.2 — Install PlatformIO
+
+**Windows** (for flashing + serial) — in VS Code: Extensions → search "PlatformIO IDE"
+→ Install. It bundles its own Python and toolchain.
+
+**WSL** (for building):
+
+```bash
+pip3 install --user platformio
+export PATH="$HOME/.local/bin:$PATH"     # add to ~/.bashrc
+pio --version
+```
+
+## 0.3 — Create `platformio.ini`
+
+At the repo root:
+
+```ini
+[env:teensy41]
+platform = teensy
+board = teensy41
+framework = arduino
+monitor_speed = 115200
+
+build_flags =
+    -I include
+    -Wall -Wextra
+
+; Only firmware/ for now.  src/core and src/embedded get added at
+; INTEGRATION.md step S1, once the shared build is set up.
+build_src_filter = +<firmware/>
+```
+
+## 0.4 — Blink: prove flashing works
+
+`firmware/main.cpp`:
+
+```cpp
+#include <Arduino.h>
+
+void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+}
+
+void loop() {
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(200);
+  digitalWrite(LED_BUILTIN, LOW);
+  delay(800);
+}
+```
+
+From **Windows**:
+
+```bash
+pio run -e teensy41 -t upload
+```
+
+### ✅ Check 0.4
+
+- [ ] Upload completes without error
+- [ ] The onboard LED blinks — **short on, long off** (not the default slow 1 Hz blink)
+
+The asymmetric pattern matters: a factory-fresh Teensy ships blinking at 1 Hz evenly. If
+you use a symmetric pattern you cannot tell your code from the factory sketch.
+
+**If upload fails:** press the physical **PROGRAM button** on the Teensy and retry. That
+forces the bootloader manually. If the Teensy Loader window never appears, the cable is
+charge-only — swap it.
+
+## 0.5 — Serial: prove you can read output
+
+Replace `firmware/main.cpp`:
+
+```cpp
+#include <Arduino.h>
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial && millis() < 3000) {}   // wait for host, but don't hang
+  Serial.println("Teensy alive");
+  Serial.printf("F_CPU = %lu Hz\n", F_CPU);
+  Serial.printf("sizeof(double) = %u\n", (unsigned)sizeof(double));
+}
+
+void loop() {
+  static uint32_t n = 0;
+  Serial.printf("tick %lu  millis=%lu\n", n++, millis());
+  delay(1000);
+}
+```
+
+Upload, then from **Windows**:
+
+```bash
+pio device monitor
+```
+
+### ✅ Check 0.5
+
+- [ ] Prints `Teensy alive`
+- [ ] `F_CPU = 600000000` — confirms 600 MHz
+- [ ] `sizeof(double) = 8` — confirms the double-precision FPU your control math needs
+- [ ] `tick` increments once per second
+
+The `while (!Serial && millis() < 3000)` guard is deliberate: it waits for a host to
+attach but gives up after 3 s, so the board still runs standalone on battery.
+
+**If the monitor shows nothing:** unplug/replug and retry — the port disappears during
+upload and takes a moment to re-enumerate. Confirm the port with `pio device list`.
+
+## 0.6 — SPI loopback (optional, 1 minute, worth it)
+
+Proves the SPI peripheral works *before* you blame the IMU. **Jumper pin 11 to pin 12**
+(MOSI→MISO) — no IMU involved.
+
+```cpp
+#include <Arduino.h>
+#include <SPI.h>
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial && millis() < 3000) {}
+  SPI.begin();
+
+  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
+  const uint8_t sent = 0xA5;
+  const uint8_t got  = SPI.transfer(sent);
+  SPI.endTransaction();
+
+  Serial.printf("sent 0x%02X  got 0x%02X  %s\n",
+                sent, got, (sent == got) ? "PASS" : "FAIL");
+}
+
+void loop() {}
+```
+
+### ✅ Check 0.6
+
+- [ ] With the jumper: `sent 0xA5  got 0xA5  PASS`
+- [ ] Remove the jumper: reads `0x00` or `0xFF` → confirms the test is real
+
+**Remove the jumper before continuing.**
+
+---
+
+## ✅ Step 0 complete
+
+| Check | ✅ |
+|---|---|
+| PlatformIO builds in WSL, flashes from Windows | ☐ |
+| LED blinks your pattern | ☐ |
+| Serial prints, `F_CPU` = 600 MHz, `sizeof(double)` = 8 | ☐ |
+| SPI loopback passes (optional) | ☐ |
+
+Now a failure at Step 2 means **the IMU**, not the toolchain. That is the entire point
+of this step.
 
 ---
 
@@ -129,11 +331,12 @@ void setup() {
 void loop() {}
 ```
 
-Build and run:
+Build and run — remember the split from Step 0.1:
 
 ```bash
-pio run -e teensy41 -t upload
-pio device monitor
+pio run -e teensy41                 # WSL:     compile
+pio run -e teensy41 -t upload       # Windows: flash
+pio device monitor                  # Windows: read
 ```
 
 ### ✅ Check 2
@@ -401,6 +604,7 @@ Only after this passes should the IMU feed a control loop.
 
 | Step | Check | ✅ |
 |---|---|---|
+| 0 | Teensy blinks, prints serial, `F_CPU`=600 MHz, `sizeof(double)`=8 | ☐ |
 | 1 | 3.3 V at VDD, grounds common, no shorts | ☐ |
 | 2 | `CHIP_ID` reads `0x24` | ☐ |
 | 3 | `INTERNAL_STATUS & 0x0F == 0x01` | ☐ |

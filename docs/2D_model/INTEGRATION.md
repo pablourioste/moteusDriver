@@ -155,6 +155,35 @@ Two build systems over **one set of sources**. Nothing is copied into an IDE, no
 sketch files, no GUI. `platformio.ini` sits at repo root doing the same job
 `CMakeLists.txt` does for the host.
 
+### WSL2: build in Linux, flash from Windows
+
+This repo lives in WSL2, and Teensy flashing does not survive that cleanly:
+
+> **Flashing re-enumerates the USB device.** The board reboots into its HalfKay
+> bootloader — a *different* USB device (`16C0:0478`) from the running sketch
+> (`16C0:0483`). A `usbipd` attachment binds to one device, so it **drops on every
+> upload**.
+
+Install PlatformIO on both sides; they share the one `platformio.ini`:
+
+| Task | Where | Command |
+|---|---|---|
+| Build | WSL2 | `pio run -e teensy41` |
+| **Flash** | **Windows** | `pio run -e teensy41 -t upload` |
+| **Serial** | **Windows** | `pio device monitor` |
+
+Windows reads the repo in place at `\\wsl$\Ubuntu\<path>` — no second clone.
+
+This pays off most at **S3**, where `moteus_tool` runs over the fdcanusb *while* the
+Teensy listens on CAN. Under pure-WSL that is two simultaneous usbipd attachments, one
+of which drops on every upload.
+
+Pure-WSL remains possible (`usbipd attach --wsl --busid X-Y` before each upload, plus
+udev rules WSL does not ship). It works; it is friction on every cycle.
+
+Full walkthrough — install, blink, serial, SPI loopback — in
+[IMU_SETUP.md](IMU_SETUP.md) **Step 0**.
+
 The one thing `-DARDUINO` changes for us: `moteus_protocol.h:26-37` takes its `#else`
 branch, defining `NaN` as `(0.0 / 0.0)` rather than
 `std::numeric_limits<double>::quiet_NaN()`. That is the behaviour we want on the MCU —
