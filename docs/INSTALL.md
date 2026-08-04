@@ -172,6 +172,18 @@ usbipd list                              # from Windows PowerShell (Admin)
 usbipd attach --wsl --busid <BUSID>      # ...repeat after EVERY upload
 ```
 
+> **You do not need usbipd, `dialout`, or a WSL restart for the Teensy** if you flash
+> from Windows. Those are for the **fdcanusb** (Part C), which does cross into WSL.
+> Check before running them — they may already be done:
+>
+> ```bash
+> groups | tr ' ' '\n' | grep -x dialout                    # in dialout already?
+> "/mnt/c/Program Files/usbipd-win/usbipd.exe" --version     # installed already?
+> ```
+>
+> `wsl --shutdown` is only needed to apply a *new* group membership, and it restarts
+> WSL — not Windows.
+
 ---
 
 # Part C — Python tooling (moteus bring-up)

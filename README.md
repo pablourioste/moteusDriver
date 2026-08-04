@@ -18,6 +18,7 @@ it. Do not try to reimplement the inner loops here — you cannot beat 30 kHz ov
 | I want to… | Read |
 |---|---|
 | **Set up my machine to build this** | [`docs/INSTALL.md`](docs/INSTALL.md) |
+| Work on something while hardware is being wired | [`docs/2D_model/PARALLEL_WORK.md`](docs/2D_model/PARALLEL_WORK.md) |
 | Understand the design and the file layout | [`docs/2D_model/ARCHITECTURE.md`](docs/2D_model/ARCHITECTURE.md) |
 | **Build the system step by step** | [`docs/2D_model/INTEGRATION.md`](docs/2D_model/INTEGRATION.md) |
 | Bring up new hardware (wiring, encoder, calibration) | [`docs/2D_model/driver+encoder/SETUP.md`](docs/2D_model/driver+encoder/SETUP.md) |
