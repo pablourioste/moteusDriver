@@ -3,7 +3,10 @@
         {
             "name": "Linux",
             "includePath": [
-                "${workspaceFolder}/**",
+                "${workspaceFolder}/include",
+                "${workspaceFolder}/src",
+                "${workspaceFolder}/apps",
+                "${workspaceFolder}/third_party",
                 "${workspaceFolder}/moteus/lib/cpp/mjbots/moteus",
                 "${workspaceFolder}/moteus/lib/cpp"
             ],
@@ -13,6 +16,44 @@
             "cppStandard": "c++17",
             "intelliSenseMode": "linux-gcc-x64",
             "compileCommands": "${workspaceFolder}/build/compile_commands.json"
+        },
+        {
+            // firmware/ is cross-compiled for the Teensy 4.1 (Cortex-M7) by
+            // PlatformIO, NOT by the CMake host build.  It needs its own
+            // IntelliSense config: Arduino.h lives in the framework package
+            // under ~/.platformio, which the Linux config above knows nothing
+            // about -- hence "cannot open source file Arduino.h".
+            //
+            // Deliberately NO compileCommands here.  Pointing this at the host
+            // build/compile_commands.json is what caused the error: firmware
+            // sources are absent from it, so IntelliSense fell back to the x86
+            // include path.
+            "name": "Teensy41",
+            "includePath": [
+                "${workspaceFolder}/firmware",
+                "${workspaceFolder}/include",
+                "${env:HOME}/.platformio/packages/framework-arduinoteensy/cores/teensy4",
+                "${env:HOME}/.platformio/packages/framework-arduinoteensy/libraries/**"
+            ],
+            "defines": [
+                "__IMXRT1062__",
+                "ARDUINO=10805",
+                "ARDUINO_TEENSY41",
+                "TEENSYDUINO=159",
+                "F_CPU=600000000",
+                "USB_SERIAL",
+                "LAYOUT_US_ENGLISH"
+            ],
+            "compilerPath": "${env:HOME}/.platformio/packages/toolchain-gccarmnoneeabi-teensy/bin/arm-none-eabi-g++",
+            "compilerArgs": [
+                "-mcpu=cortex-m7",
+                "-mfloat-abi=hard",
+                "-mfpu=fpv5-d16",
+                "-mthumb"
+            ],
+            "cStandard": "c17",
+            "cppStandard": "gnu++17",
+            "intelliSenseMode": "linux-gcc-arm"
         }
     ],
     "version": 4
