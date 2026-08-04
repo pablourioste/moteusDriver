@@ -1,0 +1,19 @@
+# Normalise line endings.
+#
+# This repo is edited from both WSL2 and Windows.  Without this, a clone or an
+# editor on the Windows side rewrites every file to CRLF, producing a diff that
+# touches every line of every file while changing nothing -- exactly what
+# happened to a stray nested clone (7378 insertions, 7378 deletions, zero real
+# content change).
+#
+# `text=auto eol=lf` stores everything as LF in the repository and checks it out
+# as LF, on every platform.
+* text=auto eol=lf
+
+# Binary files: never touch these.
+*.pdf   binary
+*.png   binary
+*.jpg   binary
+*.bin   binary
+*.elf   binary
+*.hex   binary
