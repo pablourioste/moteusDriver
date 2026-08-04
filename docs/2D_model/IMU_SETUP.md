@@ -212,15 +212,29 @@ of this step.
 **Power off / USB unplugged while wiring.**
 
 ```
-      BMI270                          Teensy 4.1
-   ┌──────────────┐               ┌──────────────────┐
-   │ VDD / VIN ───┼───────────────┤ 3.3V             │
-   │ GND       ───┼───────────────┤ GND              │
-   │ SCK / SCX ───┼───────────────┤ 13   (SCK)       │
-   │ SDI / MOSI───┼───────────────┤ 11   (MOSI)      │
-   │ SDO / MISO───┼───────────────┤ 12   (MISO)      │
-   │ CSB       ───┼───────────────┤ 10   (CS)        │
-   └──────────────┘               └──────────────────┘
+                            ┌─── USB-C  ← power + programming + serial
+                            │            (use this for ALL of steps 0-7)
+                            │
+      BMI270          ┌─────┴────────────────────────┐
+   ┌──────────────┐   │        Teensy 4.1            │
+   │              │   │                              │
+   │  VDD / VIN ──┼───┤ 3.3V ◄── regulated ON-BOARD  │
+   │              │   │          from USB 5V         │
+   │  GND       ──┼───┤ GND                          │
+   │              │   │                              │
+   │  SCK / SCX ──┼───┤ 13  SCK0                     │
+   │  SDI / MOSI──┼───┤ 11  MOSI0                    │
+   │  SDO / MISO──┼───┤ 12  MISO0                    │
+   │  CSB       ──┼───┤ 10  CS                       │
+   │              │   │                              │
+   │  INT1      ──┼─ ─┤ (optional, future)           │
+   └──────────────┘   │                              │
+                      │ VIN ◄── 5V, FINAL RIG ONLY   │
+                      │         (see power note)     │
+                      └──────────────────────────────┘
+
+   ⚠ 3.3V is an OUTPUT of the Teensy's regulator -- never feed it.
+   ⚠ Nothing on the BMI270 may EVER see 5V.  Both parts are 3.6V max.
 ```
 
 | BMI270 | Teensy | Notes |
@@ -231,20 +245,68 @@ of this step.
 | SDI / MOSI | 11 | data *into* the IMU |
 | SDO / MISO | 12 | data *out of* the IMU |
 | CSB | 10 | must be driven, never left floating |
+| INT1 | — | leave unconnected for now |
 
 Naming varies by breakout. Some label SPI pins for I2C use — `SDA`→SDI, `SCL`→SCK,
 `SDO`→MISO, `CS`→CSB. If in doubt, check the silkscreen against the BMI270 datasheet
 pin table.
 
+## Powering the Teensy — USB-C or the 5V pin?
+
+**For everything in this guide: USB-C. Do not connect VIN.**
+
+The Teensy 4.1 has an **on-board 3.3 V regulator**. Whether you feed it from USB or
+VIN, the `3.3V` pin is that regulator's *output* — the BMI270 is powered the same way
+either way. Nothing about the IMU changes.
+
+| | USB-C | VIN (5 V pin) |
+|---|---|---|
+| Powers the board | ✅ | ✅ |
+| Programming + serial | ✅ | ❌ still need USB |
+| Correct for steps 0–7 | ✅ | ❌ |
+| Correct for the untethered rig | ❌ | ✅ |
+
+```
+  ⚠  DO NOT connect USB and VIN at the same time on a stock Teensy 4.1.
+     The two 5 V sources are joined on-board and will fight each other.
+
+     PJRC's documented fix is to CUT the small trace between the VUSB
+     and VIN pads on the underside.  After cutting, USB no longer
+     powers the board -- VIN becomes the only supply, and USB is
+     programming and serial only.
+
+     Do not cut it yet.  You need USB power for all of steps 0-7.
+```
+
+### Why not power it from the moteus 5 V rail?
+
+You will be tempted, because the moteus board has one. **Don't — not until N2.**
+
+When the motor draws current, a shared supply sags. A Teensy that browns out
+mid-control-loop is the worst possible failure mode: the cube is balancing, the wheel
+is spinning, and the controller resets. (The moteus `watchdog_timeout` catches it and
+stops the board — but that is a safety net, not a plan.)
+
+Keep the Teensy on USB, from your laptop, through Phase 7 of
+[INTEGRATION.md](INTEGRATION.md). It also means you can unplug the motor supply
+without losing your serial session.
+
+### The one thing you still must share
+
+**Grounds must be common** — Teensy GND, BMI270 GND, and (later) the CAN transceiver
+and moteus GND. Separate supplies are fine; separate *grounds* are not. A CAN link with
+no shared ground appears to work and then corrupts frames once motor current flows.
+
 ### ✅ Check 1 — before plugging in USB
 
 With the multimeter, everything unpowered:
 
-- [ ] BMI270 `VDD` traces to Teensy **3.3V**, not 5V
+- [ ] BMI270 `VDD` traces to Teensy **3.3V**, not 5V or VIN
+- [ ] **Nothing is connected to VIN**
 - [ ] GND continuity between both boards
 - [ ] No shorts between adjacent pins
 
-Then plug in USB and measure:
+Then plug in **USB-C** and measure:
 
 - [ ] **3.3 V** (±0.1) at the BMI270 VDD pin
 - [ ] No pin on the BMI270 above 3.3 V

@@ -319,8 +319,19 @@ Teensy GND          ──── GND ┘
 ground the link appears to work and then corrupts once motor current flows — the classic
 reaction-wheel debugging nightmare.
 
-**Power:** Teensy from USB, *not* from the moteus regulator, through the whole plan. A
-shared rail browns out the MCU mid-control-loop, which is the worst possible failure.
+**Power: Teensy from USB-C, not VIN, not the moteus regulator** — through the whole
+plan. A shared rail sags when the motor draws current, and a Teensy that browns out
+mid-control-loop is the worst possible failure: cube balancing, wheel spinning,
+controller resetting. The moteus `watchdog_timeout` catches it, but that is a safety
+net, not a plan.
+
+The `3.3V` pin is the Teensy's **on-board regulator output** — never feed it. And do
+**not** connect USB and VIN simultaneously on a stock board: the two 5 V sources are
+joined on-board and fight. PJRC's documented fix is cutting the VUSB/VIN trace
+underneath, after which VIN is the only supply and USB is programming-and-serial only.
+That is a change for the final untethered rig (N2+), not for bring-up.
+
+Power detail and the wiring diagram: [IMU_SETUP.md](IMU_SETUP.md) Step 1.
 
 ## H3 — Electrical verification (before connecting the Teensy)
 
@@ -648,7 +659,8 @@ regression-test the control law on the desktop after every change.
 | 2 | **Sign error → controller drives the fall at full authority** | **H4 wheel removal** + N1. Non-negotiable |
 | 3 | **5 V transceiver destroys CAN3** (unrecoverable) | H1 part selection; **H3 meter check** |
 | 4 | **`micros()` rollover at 71 min → negative `dt`** | S2 64-bit counter; **S2f 90-min soak** |
-| 5 | Shared rail brownout resets Teensy mid-loop | H2 USB supply; watchdog catches the reset |
+| 5 | Shared rail brownout resets Teensy mid-loop | H2 USB-C supply; watchdog catches the reset |
+| 5b | USB and VIN connected together → two 5 V sources fight | H2: USB-C only until the VUSB/VIN trace is cut for the untethered rig |
 | 6 | Blob upload at 10 MHz fails `INTERNAL_STATUS` | S2 ≤2 MHz during upload; S2b |
 | 7 | `core/` diverges between builds | S1 reference-in-place, never copy |
 | 8 | FD DLC not padded → frame rejected | S4 pad in `transact()` |
