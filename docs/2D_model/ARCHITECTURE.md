@@ -1,7 +1,89 @@
 # Architecture
 
-Design rationale and the contracts between layers. For a first orientation
-read the [root README](../README.md); this document is the deeper reference.
+**What the system looks like and why.** Design rationale, layer contracts, and the
+target file organization.
+
+| Document | Answers |
+|---|---|
+| [root README](../../README.md) | What is this? How do I run it? |
+| **this file** | **What does it look like, and why is it built that way?** |
+| [INTEGRATION.md](INTEGRATION.md) | How do I build it, in what order, and how do I check each step? |
+
+---
+
+## 0. Target file organization
+
+The repository is being ported from a Linux host program to a **Teensy 4.1 standalone
+controller** (see [INTEGRATION.md](INTEGRATION.md) for the sequencing). Both targets
+build from **one set of sources**.
+
+```
+moteusDriver/
+│
+├── CMakeLists.txt          HOST build — x86 Linux, unchanged by the port
+├── platformio.ini          TEENSY build — same sources, ARM cross-compile
+│
+├── include/
+│   ├── core/               ◄── PLATFORM-AGNOSTIC. Builds for BOTH targets.
+│   │   ├── Types.hpp           ImuData, MotorState, BodyState — plain SI data
+│   │   ├── StateEstimator.hpp      complementary filter
+│   │   ├── BalancingController.hpp LQR + safety envelope
+│   │   └── interfaces/
+│   │       ├── IImuSensor.hpp      the seam that makes the port possible
+│   │       └── IMotorDriver.hpp
+│   │
+│   ├── drivers/            ◄── LINUX HOST hardware
+│   │   ├── ImuDriver.hpp           BMI270 over Linux i2c-dev
+│   │   ├── MoteusDriverWrapper.hpp moteus via vendor C++ client (POSIX)
+│   │   ├── MoteusConfig.hpp
+│   │   └── Bmi270Registers.hpp     [NEW] register map shared by both IMU drivers
+│   │
+│   ├── embedded/           ◄── [NEW] TEENSY hardware
+│   │   ├── Bmi270SpiDriver.hpp     BMI270 over SPI  : IImuSensor
+│   │   └── TeensyMoteusDriver.hpp  moteus over CAN3 : IMotorDriver
+│   │
+│   └── testing/            ◄── HOST ONLY (filesystem, tty)
+│       ├── MotorValidator.hpp
+│       └── CsvLogger.hpp
+│
+├── src/                    implementations mirroring include/
+│   ├── core/  drivers/  embedded/  testing/
+│
+├── apps/                   HOST entry points, one per executable
+│   ├── cube_balancer.cpp   direct_motor_test.cpp
+│   ├── imu_test.cpp        legacy_moteus_driver.cpp
+│
+├── firmware/               ◄── [NEW] TEENSY entry point
+│   └── main.cpp                setup() / loop(), no argv, no signals
+│
+├── config/                 board config template → build/current_config.cfg
+├── data/calibration/       moteus calibration logs
+├── third_party/            bmi270_config.h — Bosch blob, Apache-2.0
+└── docs/
+    ├── 2D_model/           this cube: ARCHITECTURE, INTEGRATION, IMU_BLUEPRINT
+    └── 3d_scaling/         extending to 3D corner balancing
+```
+
+**What each build compiles:**
+
+| Target | Includes | Excludes |
+|---|---|---|
+| Host (`cmake`) | `core/` + `drivers/` + `testing/` + `apps/` | `embedded/`, `firmware/` |
+| Teensy (`pio`) | `core/` + `embedded/` + `firmware/` | `drivers/`, `testing/`, `apps/` |
+
+`core/` is the intersection — **it is the only directory both builds compile, and it is
+never modified by the port.** That is the whole point of the layering rule below.
+
+### Where the port's new code goes
+
+| Concern | File | Replaces |
+|---|---|---|
+| IMU over SPI | `src/embedded/Bmi270SpiDriver.cpp` | `ImuDriver.cpp`'s 4 Linux bus functions; ~90% of the register logic is reused |
+| moteus over CAN | `src/embedded/TeensyMoteusDriver.cpp` | `moteus.h` + `moteus_transport.h` (2960 lines of POSIX) with ~150 lines |
+| Entry point | `firmware/main.cpp` | `apps/cube_balancer.cpp`'s shell; the loop *body* is reused |
+
+The vendor headers `moteus_protocol.h` and `moteus_multiplex.h` are **kept and reused on
+both targets** — they are portable and carry all the register encoding.
 
 ---
 
@@ -172,7 +254,7 @@ Linearised about upright, with `I_total = I_b + m_w·l_w²`:
 ```
 
 The positive `A(2,1)` entry is the open-loop instability — the cube falls.
-Full solve in [`3d_scaling/README.md`](3d_scaling/README.md) §4.
+Full solve in [`3d_scaling/README.md`](../3d_scaling/README.md) §4.
 
 ---
 
@@ -240,6 +322,18 @@ suggests `chrt -f 50` if more than 5% of cycles miss. Linux `usleep` on a
 non-realtime kernel typically holds a few hundred microseconds of jitter,
 which is fine against a 5 ms budget.
 
+### Why this motivates the Teensy port
+
+That jitter is the ceiling on this design, and `chrt -f 50` only raises it — a
+non-realtime kernel can still preempt the loop. Moving to a bare-metal
+Cortex-M7 removes the operating system from the control path entirely: no
+scheduler, no preemption, no page faults.
+
+The scheduler logic above is **kept structurally** on the Teensy; only the
+sleep call changes. Late cycles should approach zero, and measuring that is
+the empirical justification for the port —
+[INTEGRATION.md](INTEGRATION.md) step S6.
+
 ---
 
 ## 7. Extension points
@@ -247,6 +341,11 @@ which is fine against a 5 ms budget.
 **A simulated IMU.** Implement `IImuSensor` with synthetic pendulum dynamics.
 `cube_balancer` needs no change beyond choosing which to construct — this is
 the cheapest way to test a control law without risking the rig.
+
+**A different processor.** This is the interface seam's biggest payoff, and it
+is the port now underway. `Bmi270SpiDriver` and `TeensyMoteusDriver` implement
+the same two interfaces against Teensy SPI and FlexCAN-FD; `core/` does not
+change by a single line. Sequencing in [INTEGRATION.md](INTEGRATION.md).
 
 **A second motor.** `IMotorDriver` is per-controller; construct one per axis.
 But **do not** call `sendTorque()` in a loop over three drivers: that is
@@ -264,4 +363,4 @@ usable from a simulation.
 gimbal-lock on a corner), the state grows to 9, and the axes couple
 gyroscopically. The interfaces do not change shape — that is the payoff of
 this structure. Full treatment in
-[`3d_scaling/README.md`](3d_scaling/README.md) §5.
+[`3d_scaling/README.md`](../3d_scaling/README.md) §5.
