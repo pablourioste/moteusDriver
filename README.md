@@ -17,6 +17,7 @@ it. Do not try to reimplement the inner loops here — you cannot beat 30 kHz ov
 
 | I want to… | Read |
 |---|---|
+| **Set up my machine to build this** | [`docs/INSTALL.md`](docs/INSTALL.md) |
 | Understand the design and the file layout | [`docs/2D_model/ARCHITECTURE.md`](docs/2D_model/ARCHITECTURE.md) |
 | **Build the system step by step** | [`docs/2D_model/INTEGRATION.md`](docs/2D_model/INTEGRATION.md) |
 | Bring up new hardware (wiring, encoder, calibration) | [`docs/2D_model/driver+encoder/SETUP.md`](docs/2D_model/driver+encoder/SETUP.md) |
@@ -180,10 +181,15 @@ usbipd attach --wsl --busid <BUSID>
 
 ## Dependencies
 
+Full setup — including the Teensy toolchain and the WSL2 caveats — is in
+[`docs/INSTALL.md`](docs/INSTALL.md). The short version:
+
 - CMake ≥ 3.10, a C++17 compiler
 - `moteus/` — clone of `github.com/mjbots/moteus` (header-only; gitignored)
 - `moteus-venv/` — Python venv with `moteus` + `moteus-gui` for `moteus_tool` and
   `tview` (gitignored)
+- PlatformIO ≥ 6 — Teensy firmware only. **Not** the apt package, which is broken;
+  see [`docs/INSTALL.md`](docs/INSTALL.md) Part B
 - Boost.Test, optional — `sudo apt install libboost-test-dev` enables `moteus_test`
 
 ```bash

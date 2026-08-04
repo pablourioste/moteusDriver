@@ -77,42 +77,28 @@ default). It works — it is just friction on every cycle.
 
 ## 0.2 — Install PlatformIO
 
-**Windows** (for flashing + serial) — in VS Code: Extensions → search "PlatformIO IDE"
-→ Install. It bundles its own Python and toolchain.
-
-**WSL** (for building):
-
-> ⚠ **Do not `apt install platformio`.** Ubuntu ships version **4.3.4** (from 2020),
-> which crashes on import against modern `click`:
-> `AttributeError: 'PlatformioCLI' object has no attribute 'resultcallback'`.
-> It also predates Teensy 4.1 support. If you already installed it:
-> `sudo apt remove platformio`.
-
-Install into its own venv, so PlatformIO's dependencies never mix with
-`moteus-venv` or system Python:
+**Full instructions: [`../INSTALL.md`](../INSTALL.md) Part B.** Summary:
 
 ```bash
+sudo apt remove platformio                        # ⚠ apt ships a broken 4.3.4
 python3 -m venv ~/.platformio-venv
-~/.platformio-venv/bin/pip install --upgrade pip
 ~/.platformio-venv/bin/pip install platformio
-
-# Put it on PATH -- add to ~/.bashrc to make it permanent
-export PATH="$HOME/.platformio-venv/bin:$PATH"
-
-pio --version        # expect 6.x, NOT 4.3.4
+export PATH="$HOME/.platformio-venv/bin:$PATH"    # add to ~/.bashrc
 ```
 
-Confirm you are running the venv copy, not a leftover system one:
+Verify before continuing:
 
 ```bash
-which pio            # must be ~/.platformio-venv/bin/pio
+which pio          # must be ~/.platformio-venv/bin/pio
+pio --version      # must be 6.x, NOT 4.3.4
 ```
 
-If it still says `/usr/bin/pio`, the apt package is shadowing it — remove it as above
-and open a new shell.
+> Ubuntu's `platformio` package is version 4.3.4 from 2020. It crashes on import
+> against modern `click` (`'PlatformioCLI' object has no attribute 'resultcallback'`)
+> and predates Teensy 4.1 support. If `which pio` says `/usr/bin/pio`, it is shadowing
+> your venv — remove it and open a new shell.
 
-The first `pio run` downloads the ARM toolchain (~200 MB) and takes a couple of
-minutes. Subsequent builds are ~25 s.
+**For flashing (Windows side):** VS Code → Extensions → "PlatformIO IDE".
 
 ## 0.3 — Verify the build
 
