@@ -6,6 +6,11 @@
 // Wiring: a single jumper from pin 11 (MOSI) to pin 12 (MISO).
 //         Nothing else.  Remove it before wiring the IMU.
 //
+// NOTE: no LED activity here, and none is possible.  LED_BUILTIN is pin
+// 13, which is also SCK; SPI.begin() re-muxes that pad to the SPI
+// peripheral and it stops being a GPIO.  From this sketch onward serial
+// output is the ONLY liveness signal -- a dark LED is not a crash.
+//
 // Whatever is transmitted comes straight back.  Remove the jumper and
 // the test must FAIL -- that is what proves the test is real rather than
 // reporting success from a disconnected bus.
@@ -35,6 +40,14 @@ void setup() {
   Serial.println("Jumper pin 11 (MOSI) -> pin 12 (MISO)");
   Serial.println();
 
+  // Pull MISO down BEFORE SPI.begin() claims the pin.  Without this the
+  // negative control is a lie: an undriven CMOS input floats, and MOSI
+  // running alongside it couples enough charge that the "received" byte
+  // often mirrors the transmitted one.  The test would then PASS with no
+  // jumper -- reporting a working bus that does not exist.
+  // With a pulldown, an absent jumper reads a clean 0x00.
+  pinMode(MISO, INPUT_PULLDOWN);
+
   SPI.begin();
   delay(10);
 
@@ -59,8 +72,9 @@ void setup() {
     Serial.println("A test that passes either way proves nothing.");
   } else {
     Serial.printf("FAIL -- %d/%d matched.\n", passed, total);
-    Serial.println("  All 0x00 -> jumper missing, or MISO shorted low");
-    Serial.println("  All 0xFF -> jumper missing, MISO floating high");
+    Serial.println("  All 0x00 -> jumper missing (expected: MISO pulldown),");
+    Serial.println("              or MISO shorted low");
+    Serial.println("  All 0xFF -> MISO stuck high -- shorted to 3.3V?");
     Serial.println("  Otherwise -> check the jumper is 11 to 12");
   }
 }

@@ -14,6 +14,11 @@
 //
 // Wiring (IMU_SETUP.md step 1):
 //   BMI270  VDD->3.3V  GND->GND  SCK->13  SDI->11  SDO->12  CSB->10
+//
+// NOTE: the result prints ONCE, from setup(); loop() is empty.  Attach
+// the serial monitor BEFORE resetting, or you will see a blank screen
+// and mistake it for a dead board.  The LED cannot help you here either
+// -- LED_BUILTIN is pin 13, which SPI.begin() takes over as SCK.
 
 #include <Arduino.h>
 #include <SPI.h>
