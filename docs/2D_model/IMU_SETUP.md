@@ -82,50 +82,59 @@ default). It works — it is just friction on every cycle.
 
 **WSL** (for building):
 
+> ⚠ **Do not `apt install platformio`.** Ubuntu ships version **4.3.4** (from 2020),
+> which crashes on import against modern `click`:
+> `AttributeError: 'PlatformioCLI' object has no attribute 'resultcallback'`.
+> It also predates Teensy 4.1 support. If you already installed it:
+> `sudo apt remove platformio`.
+
+Install into its own venv, so PlatformIO's dependencies never mix with
+`moteus-venv` or system Python:
+
 ```bash
-pip3 install --user platformio
-export PATH="$HOME/.local/bin:$PATH"     # add to ~/.bashrc
-pio --version
+python3 -m venv ~/.platformio-venv
+~/.platformio-venv/bin/pip install --upgrade pip
+~/.platformio-venv/bin/pip install platformio
+
+# Put it on PATH -- add to ~/.bashrc to make it permanent
+export PATH="$HOME/.platformio-venv/bin:$PATH"
+
+pio --version        # expect 6.x, NOT 4.3.4
 ```
 
-## 0.3 — Create `platformio.ini`
+Confirm you are running the venv copy, not a leftover system one:
 
-At the repo root:
-
-```ini
-[env:teensy41]
-platform = teensy
-board = teensy41
-framework = arduino
-monitor_speed = 115200
-
-build_flags =
-    -I include
-    -Wall -Wextra
-
-; Only firmware/ for now.  src/core and src/embedded get added at
-; INTEGRATION.md step S1, once the shared build is set up.
-build_src_filter = +<firmware/>
+```bash
+which pio            # must be ~/.platformio-venv/bin/pio
 ```
+
+If it still says `/usr/bin/pio`, the apt package is shadowing it — remove it as above
+and open a new shell.
+
+The first `pio run` downloads the ARM toolchain (~200 MB) and takes a couple of
+minutes. Subsequent builds are ~25 s.
+
+## 0.3 — Verify the build
+
+`platformio.ini` and `firmware/main.cpp` **already exist** in the repo. Just build:
+
+```bash
+pio run -e teensy41
+```
+
+### ✅ Check 0.3
+
+- [ ] Ends with `[SUCCESS]`
+- [ ] Reports Teensy 4.1 memory usage — expect **~8 MB flash free**, ~450 KB RAM1 free
+
+That confirms compiler, framework and board config without any hardware attached. If
+this fails, it is a toolchain problem, not a wiring problem.
 
 ## 0.4 — Blink: prove flashing works
 
-`firmware/main.cpp`:
-
-```cpp
-#include <Arduino.h>
-
-void setup() {
-  pinMode(LED_BUILTIN, OUTPUT);
-}
-
-void loop() {
-  digitalWrite(LED_BUILTIN, HIGH);
-  delay(200);
-  digitalWrite(LED_BUILTIN, LOW);
-  delay(800);
-}
-```
+The supplied `firmware/main.cpp` blinks **short on (200 ms), long off (800 ms)** and
+prints over serial. The asymmetry is deliberate: a factory-fresh Teensy blinks *evenly*
+at 1 Hz, so a symmetric pattern would not prove your code is the one running.
 
 From **Windows**:
 
@@ -136,7 +145,7 @@ pio run -e teensy41 -t upload
 ### ✅ Check 0.4
 
 - [ ] Upload completes without error
-- [ ] The onboard LED blinks — **short on, long off** (not the default slow 1 Hz blink)
+- [ ] LED blinks **short on, long off** — not the even factory blink
 
 The asymmetric pattern matters: a factory-fresh Teensy ships blinking at 1 Hz evenly. If
 you use a symmetric pattern you cannot tell your code from the factory sketch.
@@ -147,27 +156,7 @@ charge-only — swap it.
 
 ## 0.5 — Serial: prove you can read output
 
-Replace `firmware/main.cpp`:
-
-```cpp
-#include <Arduino.h>
-
-void setup() {
-  Serial.begin(115200);
-  while (!Serial && millis() < 3000) {}   // wait for host, but don't hang
-  Serial.println("Teensy alive");
-  Serial.printf("F_CPU = %lu Hz\n", F_CPU);
-  Serial.printf("sizeof(double) = %u\n", (unsigned)sizeof(double));
-}
-
-void loop() {
-  static uint32_t n = 0;
-  Serial.printf("tick %lu  millis=%lu\n", n++, millis());
-  delay(1000);
-}
-```
-
-Upload, then from **Windows**:
+The same sketch already prints. From **Windows**:
 
 ```bash
 pio device monitor

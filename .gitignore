@@ -20,3 +20,6 @@ moteus/
 *.swp
 *~
 .DS_Store
+
+# PlatformIO build output (Teensy firmware)
+.pio/
