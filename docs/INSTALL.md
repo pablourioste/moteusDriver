@@ -13,7 +13,7 @@ Everything you need to build this repository, from a fresh machine.
 
 ```bash
 cmake --build build          # Linux host binaries  (x86)
-pio run -e teensy41          # Teensy firmware      (ARM Cortex-M7)
+pio run -e board_check          # Teensy firmware      (ARM Cortex-M7)
 ```
 
 You do not need both. Install only what you are working on:
@@ -112,7 +112,7 @@ If `which pio` still says `/usr/bin/pio`, the apt package is shadowing it. Remov
 ## B3. First build
 
 ```bash
-pio run -e teensy41
+pio run -e board_check
 ```
 
 The first run downloads the ARM toolchain and Teensy framework (~500 MB) into
@@ -143,8 +143,8 @@ Recommended split — same `platformio.ini` both sides:
 
 | Task | Where | Command |
 |---|---|---|
-| Build | WSL2 | `pio run -e teensy41` |
-| **Flash** | **Windows** | `pio run -e teensy41 -t upload` |
+| Build | WSL2 | `pio run -e board_check` |
+| **Flash** | **Windows** | `pio run -e board_check -t upload` |
 | **Serial** | **Windows** | `pio device monitor` |
 
 Install PlatformIO on Windows through VS Code (Extensions → "PlatformIO IDE"); it
@@ -229,7 +229,7 @@ configurations**:
 
 Switch with `Ctrl+Shift+P` → *C/C++: Select a Configuration*.
 
-If `firmware/main.cpp` reports `cannot open source file "Arduino.h"`:
+If a file under `firmware/` reports `cannot open source file "Arduino.h"`:
 
 1. Confirm you are on the **Teensy41** configuration, not Linux
 2. Confirm Part B3 completed — the framework must exist under `~/.platformio`
@@ -268,7 +268,7 @@ python3 -m venv ~/.platformio-venv
 ~/.platformio-venv/bin/pip install platformio
 echo 'export PATH="$HOME/.platformio-venv/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
-pio run -e teensy41
+pio run -e board_check
 
 # C — Python tooling
 python3 -m venv moteus-venv

@@ -53,8 +53,8 @@ The clean split — **same `platformio.ini`, both sides**:
 
 | Task | Where | Command |
 |---|---|---|
-| **Build** | WSL2 | `pio run -e teensy41` |
-| **Flash** | **Windows** | `pio run -e teensy41 -t upload` |
+| **Build** | WSL2 | `pio run -e board_check` |
+| **Flash** | **Windows** | `pio run -e board_check -t upload` |
 | **Serial monitor** | **Windows** | `pio device monitor` |
 
 Building in WSL keeps the fast native filesystem and the same shell as your `cmake`
@@ -102,10 +102,21 @@ pio --version      # must be 6.x, NOT 4.3.4
 
 ## 0.3 — Verify the build
 
-`platformio.ini` and `firmware/main.cpp` **already exist** in the repo. Just build:
+Everything you need is already in the repo. **Each hardware test is its own folder and
+its own PlatformIO environment**, because a Teensy binary can have only one `setup()`:
+
+```
+firmware/
+  board_check/     ← step 0.4 / 0.5   blink + serial       (no hardware)
+  spi_loopback/    ← step 0.6         SPI peripheral       (one jumper)
+  imu_spi_test/    ← step 2           BMI270 CHIP_ID       (IMU wired)
+```
+
+Pick the one you want with `-e`:
 
 ```bash
-pio run -e teensy41
+pio run -e board_check          # build just this test
+pio run                         # build ALL of them -- catches bit-rot
 ```
 
 ### ✅ Check 0.3
@@ -118,23 +129,20 @@ this fails, it is a toolchain problem, not a wiring problem.
 
 ## 0.4 — Blink: prove flashing works
 
-The supplied `firmware/main.cpp` blinks **short on (200 ms), long off (800 ms)** and
+`firmware/board_check/main.cpp` blinks **short on (200 ms), long off (800 ms)** and
 prints over serial. The asymmetry is deliberate: a factory-fresh Teensy blinks *evenly*
 at 1 Hz, so a symmetric pattern would not prove your code is the one running.
 
 From **Windows**:
 
 ```bash
-pio run -e teensy41 -t upload
+pio run -e board_check -t upload
 ```
 
 ### ✅ Check 0.4
 
 - [ ] Upload completes without error
 - [ ] LED blinks **short on, long off** — not the even factory blink
-
-The asymmetric pattern matters: a factory-fresh Teensy ships blinking at 1 Hz evenly. If
-you use a symmetric pattern you cannot tell your code from the factory sketch.
 
 **If upload fails:** press the physical **PROGRAM button** on the Teensy and retry. That
 forces the bootloader manually. If the Teensy Loader window never appears, the cable is
@@ -166,31 +174,20 @@ upload and takes a moment to re-enumerate. Confirm the port with `pio device lis
 Proves the SPI peripheral works *before* you blame the IMU. **Jumper pin 11 to pin 12**
 (MOSI→MISO) — no IMU involved.
 
-```cpp
-#include <Arduino.h>
-#include <SPI.h>
-
-void setup() {
-  Serial.begin(115200);
-  while (!Serial && millis() < 3000) {}
-  SPI.begin();
-
-  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
-  const uint8_t sent = 0xA5;
-  const uint8_t got  = SPI.transfer(sent);
-  SPI.endTransaction();
-
-  Serial.printf("sent 0x%02X  got 0x%02X  %s\n",
-                sent, got, (sent == got) ? "PASS" : "FAIL");
-}
-
-void loop() {}
+```bash
+pio run -e spi_loopback -t upload
+pio device monitor
 ```
+
+`firmware/spi_loopback/main.cpp` sends five distinctive patterns and checks each comes
+back. (`0x00` and `0xFF` are avoided deliberately — they are indistinguishable from a
+stuck-low or floating line.)
 
 ### ✅ Check 0.6
 
-- [ ] With the jumper: `sent 0xA5  got 0xA5  PASS`
-- [ ] Remove the jumper: reads `0x00` or `0xFF` → confirms the test is real
+- [ ] With the jumper: `PASS -- 5/5. SPI peripheral works.`
+- [ ] **Remove the jumper and re-run: it must FAIL.** A test that passes either way
+      proves nothing
 
 **Remove the jumper before continuing.**
 
@@ -263,63 +260,39 @@ The first real question: is the IMU alive and talking? We ask for its ID.
 `CHIP_ID` (register 0x00) is read-only, always reads **0x24**, and needs no setup. It
 exercises the whole SPI round trip while depending on nothing.
 
-Create `firmware/imu_id_test.cpp` (a temporary bring-up sketch):
-
-```cpp
-#include <Arduino.h>
-#include <SPI.h>
-
-constexpr int kCsPin = 10;
-
-// SPI read: register | 0x80, then a DUMMY byte, then the data.
-// The BMI270 always returns one garbage byte first on SPI.
-uint8_t readReg(uint8_t reg) {
-  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
-  digitalWrite(kCsPin, LOW);
-  SPI.transfer(reg | 0x80);
-  SPI.transfer(0x00);          // dummy byte — DISCARD
-  const uint8_t value = SPI.transfer(0x00);
-  digitalWrite(kCsPin, HIGH);
-  SPI.endTransaction();
-  return value;
-}
-
-void setup() {
-  Serial.begin(115200);
-  while (!Serial && millis() < 3000) {}
-
-  pinMode(kCsPin, OUTPUT);
-  digitalWrite(kCsPin, HIGH);
-  SPI.begin();
-  delay(10);
-
-  // The part boots in I2C mode.  The first CS falling edge switches it to
-  // SPI, so this first read is invalid BY DESIGN.  Discard it.
-  readReg(0x00);
-  delay(1);
-
-  const uint8_t id = readReg(0x00);
-  Serial.printf("CHIP_ID = 0x%02X  (expect 0x24)\n", id);
-  Serial.println(id == 0x24 ? "PASS" : "FAIL");
-}
-
-void loop() {}
-```
-
-Build and run — remember the split from Step 0.1:
+The test is already written: **`firmware/imu_spi_test/main.cpp`**. It reads `CHIP_ID`
+and nothing else, and prints a diagnosis if the value is wrong.
 
 ```bash
-pio run -e teensy41                 # WSL:     compile
-pio run -e teensy41 -t upload       # Windows: flash
-pio device monitor                  # Windows: read
+pio run -e imu_spi_test               # WSL:     compile
+pio run -e imu_spi_test -t upload     # Windows: flash
+pio device monitor                    # Windows: read
+```
+
+Expected:
+
+```
+=== BMI270 SPI identity test ===
+CHIP_ID = 0x24   (expect 0x24)
+PASS -- BMI270 responding over SPI
 ```
 
 ### ✅ Check 2
 
 - [ ] Serial prints `CHIP_ID = 0x24` and `PASS`
 
-**Start at 1 MHz** as above. Raise to 10 MHz only after everything works — that isolates
-signal-integrity problems from logic bugs.
+**It runs at 1 MHz deliberately** (`kSpiHz` in the file). The BMI270 tolerates 10 MHz,
+but a slow clock first separates signal-integrity problems from logic bugs. Raise it only
+once the identity read is reliable.
+
+Two details in that file worth understanding before you write the real driver — both
+are documented in the source:
+
+- **The dummy byte.** SPI reads send `reg | 0x80`, then discard **one** byte, then read.
+  The datasheet states the first byte on SDO is garbage. Forget it and every subsequent
+  byte shifts by one — the most common BMI270 SPI bug, with no I2C equivalent.
+- **The first read is thrown away.** The part powers up in I2C mode and switches to SPI
+  on the first CS falling edge, so that read is the mode-select, not a measurement.
 
 ### If it fails
 

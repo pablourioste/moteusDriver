@@ -80,7 +80,31 @@ never modified by the port.** That is the whole point of the layering rule below
 |---|---|---|
 | IMU over SPI | `src/embedded/Bmi270SpiDriver.cpp` | `ImuDriver.cpp`'s 4 Linux bus functions; ~90% of the register logic is reused |
 | moteus over CAN | `src/embedded/TeensyMoteusDriver.cpp` | `moteus.h` + `moteus_transport.h` (2960 lines of POSIX) with ~150 lines |
-| Entry point | `firmware/main.cpp` | `apps/cube_balancer.cpp`'s shell; the loop *body* is reused |
+| Entry point | `firmware/cube_balancer/main.cpp` | `apps/cube_balancer.cpp`'s shell; the loop *body* is reused |
+
+### `firmware/` — one folder per binary
+
+A Teensy binary can have exactly one `setup()`/`loop()`, so two sketches in the same
+build tree is a duplicate-symbol link error. Each hardware test therefore gets its own
+folder **and** its own `platformio.ini` environment selecting only that folder:
+
+```
+firmware/
+  board_check/     blink + serial          no hardware      -e board_check
+  spi_loopback/    SPI peripheral          one jumper       -e spi_loopback
+  imu_spi_test/    BMI270 CHIP_ID          IMU wired        -e imu_spi_test
+  can_listen/      CAN-FD receive          [S3, later]
+  cube_balancer/   the real control loop   [S6, later]
+```
+
+```bash
+pio run -e imu_spi_test -t upload    # one test
+pio run                              # build all -- catches bit-rot
+```
+
+Adding a test is a new folder plus a three-line environment block. The bring-up sketches
+stay in the repo rather than being deleted: when something breaks later, re-running
+`imu_spi_test` isolates sensor from driver in one flash.
 
 The vendor headers `moteus_protocol.h` and `moteus_multiplex.h` are **kept and reused on
 both targets** — they are portable and carry all the register encoding.

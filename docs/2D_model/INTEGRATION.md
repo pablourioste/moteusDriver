@@ -44,7 +44,7 @@ repo, VS Code, and C++. You add one command next to the one you already run:
 
 ```bash
 cmake --build build      # host binaries (today, unchanged)
-pio run -e teensy41      # Teensy firmware (new, same source files)
+pio run -e board_check      # Teensy firmware (new, same source files)
 ```
 
 **How much code has to be rewritten?** Less than it looks:
@@ -146,7 +146,7 @@ keep this repo, these files, this editor:
 
 ```bash
 cmake --build build      # host binaries, exactly as today — unchanged
-pio run -e teensy41      # Teensy firmware, same sources
+pio run -e board_check      # Teensy firmware, same sources
 pio run -t upload        # flash the board
 pio device monitor       # serial console
 ```
@@ -168,8 +168,8 @@ Install PlatformIO on both sides; they share the one `platformio.ini`:
 
 | Task | Where | Command |
 |---|---|---|
-| Build | WSL2 | `pio run -e teensy41` |
-| **Flash** | **Windows** | `pio run -e teensy41 -t upload` |
+| Build | WSL2 | `pio run -e board_check` |
+| **Flash** | **Windows** | `pio run -e board_check -t upload` |
 | **Serial** | **Windows** | `pio device monitor` |
 
 Windows reads the repo in place at `\\wsl$\Ubuntu\<path>` — no second clone.
@@ -387,7 +387,7 @@ existing forward-declaration discipline in `MoteusDriverWrapper.hpp:18-25`. Assi
 once to a file-scope `static const double kNan` rather than re-dividing at 200 Hz.
 
 **Check S1:**
-- `pio run -e teensy41` links `src/core/StateEstimator.cpp` and
+- `pio run -e board_check` links `src/core/StateEstimator.cpp` and
   `src/core/BalancingController.cpp` **unmodified**
 - `cmake --build build` still produces all four host binaries, zero `CMakeLists.txt` diff
 - Flash a sketch printing `sizeof(ImuData)` and `sizeof(MotorState)` — must read **72**
