@@ -235,7 +235,7 @@ bool ImuDriver::initialize(std::string* error) {
         return fail("accel_scale_" + std::string(axis_names[i]) + " is " +
                     std::to_string(scales[i]) +
                     ", which is not a plausible calibration gain (expected "
-                    "near 1.0).\nRe-run firmware/imu_calibrate menu [f] and "
+                    "near 1.0).\nRe-run firmware/imu/imu_calibrate menu [f] and "
                     "check the transcribed build flags.");
       }
     }

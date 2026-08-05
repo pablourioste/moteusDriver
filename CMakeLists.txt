@@ -239,7 +239,7 @@ set(IMU_I2C_ADDRESS 0x68 CACHE STRING
 
 # IMU calibration, measured per physical part -- never guessed.
 #
-# Produced by firmware/imu_calibrate: menu [g] for the gyro biases, and
+# Produced by firmware/imu/imu_calibrate: menu [g] for the gyro biases, and
 # [1]..[6] then [f] for the six-position accel fit.  That sketch prints them
 # as PlatformIO build flags for the Teensy build; these cache variables are
 # the same numbers for the host build, so both targets correct the same

@@ -46,7 +46,7 @@ GRAVITY = 9.80665
 
 DEG_TO_RAD = 0.017453292519943295
 
-# What this rig is actually configured for; see firmware/telemetry_test.
+# What this rig is actually configured for; see firmware/full_case/telemetry_test.
 # Change these together with the firmware registers, never separately.
 RIG_ACCEL_RANGE_REG = 0    # +-2 g
 RIG_GYRO_RANGE_REG = 2     # +-500 dps

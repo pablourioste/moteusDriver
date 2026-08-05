@@ -53,7 +53,7 @@ today either way.
 | `analyze.ipynb` | the four analysis views |
 
 The firmware side lives in `include/core/Telemetry*.hpp`,
-`src/core/TelemetryFrame.cpp` and `firmware/telemetry_test/`.
+`src/core/TelemetryFrame.cpp` and `firmware/full_case/telemetry_test/`.
 
 ## Dependencies
 

@@ -53,8 +53,11 @@ moteusDriver/
 │   ├── cube_balancer.cpp   direct_motor_test.cpp
 │   ├── imu_test.cpp        legacy_moteus_driver.cpp
 │
-├── firmware/               ◄── [NEW] TEENSY entry point
-│   └── main.cpp                setup() / loop(), no argv, no signals
+├── firmware/               ◄── [NEW] TEENSY entry points, by part under test
+│   ├── teensy/                 the MCU alone   board_check, spi_loopback, core_check
+│   ├── imu/                    the BMI270      chip id, blob, read, calibrate, driver
+│   ├── drivers/                the moteus      can_listen
+│   └── full_case/              several at once telemetry_test
 │
 ├── config/                 board config template → build/current_config.cfg
 ├── data/calibration/       moteus calibration logs
@@ -80,29 +83,46 @@ never modified by the port.** That is the whole point of the layering rule below
 |---|---|---|
 | IMU over SPI | `src/embedded/Bmi270SpiDriver.cpp` | `ImuDriver.cpp`'s 4 Linux bus functions; ~90% of the register logic is reused |
 | moteus over CAN | `src/embedded/TeensyMoteusDriver.cpp` | `moteus.h` + `moteus_transport.h` (2960 lines of POSIX) with ~150 lines |
-| Entry point | `firmware/cube_balancer/main.cpp` | `apps/cube_balancer.cpp`'s shell; the loop *body* is reused |
+| Entry point | `firmware/full_case/cube_balancer/main.cpp` | `apps/cube_balancer.cpp`'s shell; the loop *body* is reused |
 
-### `firmware/` — one folder per binary
+### `firmware/` — one folder per binary, grouped by part under test
 
 A Teensy binary can have exactly one `setup()`/`loop()`, so two sketches in the same
 build tree is a duplicate-symbol link error. Each hardware test therefore gets its own
-folder **and** its own `platformio.ini` environment selecting only that folder:
+folder **and** its own `platformio.ini` environment selecting only that folder.
+
+The folders sit under the part of the rig they exercise, so "what do I flash to check the
+IMU?" is answered by listing a directory rather than by reading every sketch header:
 
 ```
 firmware/
-  board_check/     blink + serial          no hardware      -e board_check
-  spi_loopback/    SPI peripheral          one jumper       -e spi_loopback
-  imu_spi_test/    BMI270 CHIP_ID          IMU wired        -e imu_spi_test
-  can_listen/      CAN-FD receive          [S3, later]
-  cube_balancer/   the real control loop   [S6, later]
+  teensy/          the MCU alone -- nothing external, or one jumper
+    board_check/     blink + serial          no hardware      -e board_check
+    spi_loopback/    SPI peripheral          one jumper       -e spi_loopback
+    core_check/      src/core/ on both       no hardware      -e core_check
+  imu/             the BMI270, wired per IMU_SETUP.md step 1
+    imu_spi_test/      BMI270 CHIP_ID                         -e imu_spi_test
+    imu_config_upload/ 8 KB Bosch blob                        -e imu_config_upload
+    imu_read/          live accel + gyro                      -e imu_read
+    imu_calibrate/     bias + six-position fit                -e imu_calibrate
+    imu_driver_test/   Bmi270SpiDriver gate                   -e imu_driver_test
+  drivers/         the moteus controller and the CAN link to it
+    can_listen/      CAN-FD receive          [S3]             -e can_listen
+  full_case/       several parts at once -- a failure can be in any of them
+    telemetry_test/  IMU -> frame -> host                     -e telemetry_test
+    cube_balancer/   the real control loop   [S6, later]
 ```
+
+**Environment names are flat and do not encode the group.** The folder moved into
+`imu/`; `pio run -e imu_read` did not change. Every `-e` in these docs still works.
 
 ```bash
 pio run -e imu_spi_test -t upload    # one test
-pio run                              # build all -- catches bit-rot
+pio run                              # only default_envs (board_check), NOT all
+pio run -e board_check -e ... -e telemetry_test   # every env -- catches bit-rot
 ```
 
-Adding a test is a new folder plus a three-line environment block. The bring-up sketches
+Adding a test is a new folder under the right part plus a three-line environment block. The bring-up sketches
 stay in the repo rather than being deleted: when something breaks later, re-running
 `imu_spi_test` isolates sensor from driver in one flash.
 

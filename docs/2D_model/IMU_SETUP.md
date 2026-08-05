@@ -103,20 +103,25 @@ pio --version      # must be 6.x, NOT 4.3.4
 ## 0.3 — Verify the build
 
 Everything you need is already in the repo. **Each hardware test is its own folder and
-its own PlatformIO environment**, because a Teensy binary can have only one `setup()`:
+its own PlatformIO environment**, because a Teensy binary can have only one `setup()`.
+The folders are grouped by the part of the rig they exercise:
 
 ```
 firmware/
-  board_check/     ← step 0.4 / 0.5   blink + serial       (no hardware)
-  spi_loopback/    ← step 0.6         SPI peripheral       (one jumper)
-  imu_spi_test/    ← step 2           BMI270 CHIP_ID       (IMU wired)
+  teensy/
+    board_check/     ← step 0.4 / 0.5   blink + serial       (no hardware)
+    spi_loopback/    ← step 0.6         SPI peripheral       (one jumper)
+  imu/
+    imu_spi_test/    ← step 2           BMI270 CHIP_ID       (IMU wired)
 ```
 
-Pick the one you want with `-e`:
+The environment name does **not** include the group — the folder moved, `-e imu_spi_test`
+did not. Pick the one you want with `-e`:
 
 ```bash
 pio run -e board_check          # build just this test
-pio run                         # build ALL of them -- catches bit-rot
+pio run                         # only default_envs (board_check), NOT all
+pio run -e board_check -e spi_loopback -e ...   # list every env to catch bit-rot
 ```
 
 ### ✅ Check 0.3
@@ -129,7 +134,7 @@ this fails, it is a toolchain problem, not a wiring problem.
 
 ## 0.4 — Blink: prove flashing works
 
-`firmware/board_check/main.cpp` blinks **short on (200 ms), long off (800 ms)** and
+`firmware/teensy/board_check/main.cpp` blinks **short on (200 ms), long off (800 ms)** and
 prints over serial. The asymmetry is deliberate: a factory-fresh Teensy blinks *evenly*
 at 1 Hz, so a symmetric pattern would not prove your code is the one running.
 
@@ -179,7 +184,7 @@ pio run -e spi_loopback -t upload
 pio device monitor
 ```
 
-`firmware/spi_loopback/main.cpp` sends five distinctive patterns and checks each comes
+`firmware/teensy/spi_loopback/main.cpp` sends five distinctive patterns and checks each comes
 back. (`0x00` and `0xFF` are avoided deliberately — they are indistinguishable from a
 stuck-low or floating line.)
 
@@ -322,7 +327,7 @@ The first real question: is the IMU alive and talking? We ask for its ID.
 `CHIP_ID` (register 0x00) is read-only, always reads **0x24**, and needs no setup. It
 exercises the whole SPI round trip while depending on nothing.
 
-The test is already written: **`firmware/imu_spi_test/main.cpp`**. It reads `CHIP_ID`
+The test is already written: **`firmware/imu/imu_spi_test/main.cpp`**. It reads `CHIP_ID`
 and nothing else, and prints a diagnosis if the value is wrong.
 
 ```bash

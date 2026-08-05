@@ -1,8 +1,8 @@
 // imu_driver_test -- the cross-validation gate for Bmi270SpiDriver.
 //
 // Bmi270SpiDriver is the class the control loop will trust for its tilt
-// estimate.  It was assembled from firmware/imu_read and
-// firmware/imu_calibrate, which are already verified on this hardware --
+// estimate.  It was assembled from firmware/imu/imu_read and
+// firmware/imu/imu_calibrate, which are already verified on this hardware --
 // but "assembled from verified code" is not the same as verified, and a
 // transcription slip in the burst logic or the correction order would
 // produce plausible-looking numbers that are quietly wrong.

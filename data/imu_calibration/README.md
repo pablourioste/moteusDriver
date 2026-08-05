@@ -1,6 +1,6 @@
 # BMI270 calibration logs
 
-Raw PuTTY session logs from `firmware/imu_calibrate`, kept for the same
+Raw PuTTY session logs from `firmware/imu/imu_calibrate`, kept for the same
 reason `data/calibration/` keeps the moteus ones: the numbers compiled
 into the firmware are meaningless without the session that produced
 them, and a calibration you cannot audit is not a calibration.
@@ -93,4 +93,4 @@ That session is why `captureAccelPosition()` now gates on off-axis
 magnitude rather than on the target axis alone: the two failures are
 indistinguishable on the target axis, but only one of them should be
 rejected. See the comment block in
-`firmware/imu_calibrate/main.cpp`.
+`firmware/imu/imu_calibrate/main.cpp`.

@@ -43,6 +43,14 @@ include/drivers/        HARDWARE implementations of those interfaces
   ImuDriver.hpp             BMI270 over Linux I2C
 include/testing/        MotorValidator, CsvLogger
 src/{core,drivers,testing}/ implementations mirroring include/
+firmware/               TEENSY sketches, one folder per pio environment,
+                        grouped by the part of the rig under test:
+  teensy/                   board_check, spi_loopback, core_check
+  imu/                      imu_spi_test, imu_config_upload, imu_read,
+                            imu_calibrate, imu_driver_test
+  drivers/                  can_listen (moteus over CAN3)
+  full_case/                telemetry_test (IMU -> frame -> host)
+                        env names stay FLAT: `-e imu_read`, not `-e imu/imu_read`
 config/current_config.cfg.in  board config template -> build/current_config.cfg
 data/calibration/       moteus-cal-*.log + README explaining the fields
 docs/

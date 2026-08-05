@@ -82,7 +82,7 @@ class ImuDriver : public IImuSensor {
     // Accelerometer offset (m/s^2) and scale (dimensionless), per axis,
     // applied as  a_corrected = (a_raw - offset) / scale.
     //
-    // These come from the six-position fit in firmware/imu_calibrate --
+    // These come from the six-position fit in firmware/imu/imu_calibrate --
     // menu [1]..[6] then [f], which prints them as paste-ready build flags.
     // The fit works because gravity is a known-magnitude reference: with
     // +X up and -X up you get two readings whose midpoint is the zero

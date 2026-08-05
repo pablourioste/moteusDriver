@@ -6,7 +6,7 @@
 // the entire point of the interface seam.
 //
 // PROVENANCE: the logic here is not new.  It is the code from
-// firmware/imu_read/main.cpp and firmware/imu_calibrate/main.cpp -- both
+// firmware/imu/imu_read/main.cpp and firmware/imu/imu_calibrate/main.cpp -- both
 // verified on this hardware -- gathered into a class the control loop can
 // call through.  Those sketches remain in the repo and untouched, so if the
 // IMU misbehaves later, re-flashing imu_spi_test isolates sensor from
@@ -85,7 +85,7 @@ class Bmi270SpiDriver : public IImuSensor {
     double gyro_bias_z = 0.0;
 
     // Accel correction, applied as (a_raw - offset) / scale.  From the
-    // six-position fit in firmware/imu_calibrate, menu [1]..[6] then [f].
+    // six-position fit in firmware/imu/imu_calibrate, menu [1]..[6] then [f].
     //
     // Defaults are the identity transform, so an uncalibrated build behaves
     // as though these did not exist.  Scale defaults to 1.0, not 0.0 --
@@ -103,7 +103,7 @@ class Bmi270SpiDriver : public IImuSensor {
 
     // Config carrying the calibration baked in by platformio.ini
     // build_flags (GYRO_BIAS_*, ACCEL_OFFSET_*, ACCEL_SCALE_*) -- the flags
-    // firmware/imu_calibrate prints paste-ready.  Mirrors
+    // firmware/imu/imu_calibrate prints paste-ready.  Mirrors
     // ImuDriver::Config::FromBuildDefaults() on the host side.
     static Config FromBuildDefaults();
   };

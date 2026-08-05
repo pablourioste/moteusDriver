@@ -69,6 +69,59 @@ constexpr uint32_t kDataBaud = 5000000;
 uint32_t g_frames = 0;
 uint32_t g_last_report_ms = 0;
 
+// Union of every latched ESR1 error bit seen since the last report.
+// See the comment at its use site for why this is accumulated rather
+// than sampled at report time.
+uint32_t g_err_seen = 0;
+
+// FlexCAN_T4FD has NO error() method -- that exists only on the CAN2.0
+// FlexCAN_T4 template (FlexCAN_T4.tpp:1325), which fills its struct from
+// an interrupt-populated ring buffer we do not run.  The FD class offers
+// nothing equivalent, so the counters are read straight out of the
+// peripheral instead.
+//
+// Which is arguably the better source here anyway: these are the live
+// hardware registers, not a snapshot an ISR happened to capture.
+//
+// Register offsets from imxrt_flexcan.h:20-21, bit positions from the
+// library's own decoder (FlexCAN_T4.tpp:1336-1349) so this reports the
+// same things `error()` would have.
+// Taken from the library's own CAN_DEV_TABLE enum (FlexCAN_T4.h:290)
+// rather than written out as a literal, so it cannot drift from the
+// base address the `can3` object above is actually driving.
+constexpr uintptr_t kCan3Base = static_cast<uintptr_t>(CAN3);
+
+// BIT1, BIT0, ACK, CRC, FRM, STF -- ESR1 bits 15..10.
+constexpr uint32_t kEsr1ErrorMask = 0xFC00UL;
+
+inline uint32_t esr1() { return *(volatile uint32_t*)(kCan3Base + 0x20); }
+inline uint32_t ecr()  { return *(volatile uint32_t*)(kCan3Base + 0x1C); }
+
+// ECR packs both counters: TX in bits 7:0, RX in bits 15:8.
+inline uint8_t txErrCount() { return static_cast<uint8_t>(ecr() & 0xFF); }
+inline uint8_t rxErrCount() { return static_cast<uint8_t>((ecr() >> 8) & 0xFF); }
+
+// FLT_CONF, ESR1 bits 5:4.  Bus-off means the peripheral has taken
+// itself off the bus entirely -- it is not a warning, it has stopped.
+const char* faultConfinement() {
+  switch ((esr1() >> 4) & 0x3) {
+    case 0:  return "Error Active";
+    case 1:  return "Error Passive";
+    default: return "BUS OFF";
+  }
+}
+
+// ESR1 bits 18, 7, 6, 3 -- the same 0x400C8 mask the library decodes.
+const char* busState() {
+  switch (esr1() & 0x400C8) {
+    case 0x40080: return "Idle";
+    case 0x40040: return "Transmitting";
+    case 0x40008: return "Receiving";
+    case 0x0:     return "NOT SYNCHRONISED";
+    default:      return "?";
+  }
+}
+
 // Decode the moteus arbitration ID.  From moteus.h:1325-1329:
 //
 //   arbitration_id = destination
@@ -142,6 +195,19 @@ void setup() {
 void loop() {
   CANFD_message_t msg;
 
+  // Sample the latched error flags EVERY pass, not once per report.
+  // ESR1's error bits are write-1-to-clear and are set for the frame
+  // that caused them; polling at 5 s would step straight over a burst.
+  // Clearing them here (writing the bits back) is what makes the next
+  // read report new errors rather than the same stale ones forever.
+  {
+    const uint32_t flags = esr1() & kEsr1ErrorMask;
+    if (flags != 0) {
+      g_err_seen |= flags;
+      *(volatile uint32_t*)(kCan3Base + 0x20) = flags;   // w1c
+    }
+  }
+
   while (can3.read(msg)) {
     g_frames++;
 
@@ -172,12 +238,12 @@ void loop() {
   if (now - g_last_report_ms >= 5000) {
     g_last_report_ms = now;
 
-    CAN_error_t err;
-    can3.error(err, false);  // false: fill the struct, do not print its own
+    const uint8_t tx_err = txErrCount();
+    const uint8_t rx_err = rxErrCount();
 
-    Serial.printf("[%lus] frames=%lu  TX err=%u  RX err=%u  state=%s\n",
+    Serial.printf("[%lus] frames=%lu  TX err=%u  RX err=%u  %s / %s\r\n",
                   (unsigned long)(now / 1000), (unsigned long)g_frames,
-                  err.TX_ERR_COUNTER, err.RX_ERR_COUNTER, err.state);
+                  tx_err, rx_err, busState(), faultConfinement());
 
     if (g_frames == 0) {
       Serial.println("  no frames yet -- is the host actually talking?");
@@ -188,14 +254,26 @@ void loop() {
     // Frames arriving proves the wiring is roughly right.  Zero counters
     // prove the bit timing is right.  These are different claims, and only
     // the second one survives the 5 Mbit data phase.
-    if (err.RX_ERR_COUNTER > 0 || err.TX_ERR_COUNTER > 0) {
+    //
+    // g_err_seen accumulates the LATCHED ESR1 flags sampled in loop().
+    // Reading them once here would miss almost everything: the bits are
+    // write-1-to-clear and a 5 s gap between samples lets a whole error
+    // burst come and go unobserved.
+    if (rx_err > 0 || tx_err > 0 || g_err_seen != 0) {
       Serial.println("  *** BUS ERRORS -- stop and return to H3. ***");
-      if (err.CRC_ERR) { Serial.println("      CRC_ERR"); }
-      if (err.FRM_ERR) { Serial.println("      FRM_ERR (form)"); }
-      if (err.STF_ERR) { Serial.println("      STF_ERR (stuffing)"); }
-      if (err.BIT0_ERR || err.BIT1_ERR) { Serial.println("      BIT_ERR"); }
+      if (g_err_seen & (1UL << 12)) { Serial.println("      CRC_ERR"); }
+      if (g_err_seen & (1UL << 11)) { Serial.println("      FRM_ERR (form)"); }
+      if (g_err_seen & (1UL << 10)) { Serial.println("      STF_ERR (stuffing)"); }
+      if (g_err_seen & (3UL << 14)) { Serial.println("      BIT_ERR"); }
+      // ACK_ERR is EXPECTED here and is not a fault: in LISTEN_ONLY the
+      // peripheral never drives the bus, so it cannot acknowledge.  It is
+      // listed only so it does not look like a missing diagnosis.
+      if (g_err_seen & (1UL << 13)) {
+        Serial.println("      ACK_ERR (expected in listen-only, ignore)");
+      }
       Serial.println("  Most likely termination: check ~60 ohm across the bus.");
       Serial.println("  Wrong termination passes at 1 Mbit and fails at 5 Mbit.");
+      g_err_seen = 0;
     }
   }
 }
