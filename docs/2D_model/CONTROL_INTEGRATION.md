@@ -6,7 +6,7 @@ repository and consumed by the loop.
 
 **This document does not implement those three functions.** It specifies the contract they
 must satisfy, where the code goes, what calls it and in what order, what each caller
-assumes, and how you prove the insertion worked before any torque is commanded.
+assumes, and how you prove the insertion worked before any torque is commanVded.
 
 Related:
 [`ARCHITECTURE.md`](ARCHITECTURE.md) — what the system looks like and why ·
