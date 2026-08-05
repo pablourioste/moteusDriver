@@ -61,17 +61,17 @@ void setup() {
 
     const bool ok = (got == kPattern[i]);
     if (ok) { passed++; }
-    Serial.printf("  sent 0x%02X  got 0x%02X  %s\n",
+    Serial.printf("  sent 0x%02X  got 0x%02X  %s\r\n",
                   kPattern[i], got, ok ? "ok" : "MISMATCH");
   }
 
   Serial.println();
   if (passed == total) {
-    Serial.printf("PASS -- %d/%d.  SPI peripheral works.\n", passed, total);
+    Serial.printf("PASS -- %d/%d.  SPI peripheral works.\r\n", passed, total);
     Serial.println("Now REMOVE the jumper and re-run: it must FAIL.");
     Serial.println("A test that passes either way proves nothing.");
   } else {
-    Serial.printf("FAIL -- %d/%d matched.\n", passed, total);
+    Serial.printf("FAIL -- %d/%d matched.\r\n", passed, total);
     Serial.println("  All 0x00 -> jumper missing (expected: MISO pulldown),");
     Serial.println("              or MISO shorted low");
     Serial.println("  All 0xFF -> MISO stuck high -- shorted to 3.3V?");

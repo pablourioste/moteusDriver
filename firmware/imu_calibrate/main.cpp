@@ -268,7 +268,7 @@ void showLive() {
     const Sample s = readSample();
     const double mag =
         sqrt(s.a[0] * s.a[0] + s.a[1] * s.a[1] + s.a[2] * s.a[2]);
-    Serial.printf("%8.3f%8.3f%8.3f | %7.3f%7.3f%7.3f | %7.3f\n",
+    Serial.printf("%8.3f%8.3f%8.3f | %7.3f%7.3f%7.3f | %7.3f\r\n",
                   s.a[0], s.a[1], s.a[2], s.g[0], s.g[1], s.g[2], mag);
     delay(100);
   }
@@ -291,14 +291,14 @@ void showAxisMapping() {
                           st.mean_a[1] * st.mean_a[1] +
                           st.mean_a[2] * st.mean_a[2]);
 
-  Serial.printf("  accel = %.3f %.3f %.3f   |a| = %.3f\n",
+  Serial.printf("  accel = %.3f %.3f %.3f   |a| = %.3f\r\n",
                 st.mean_a[0], st.mean_a[1], st.mean_a[2], mag);
-  Serial.printf("  gravity is on %c%c   (%.3f m/s^2)\n",
+  Serial.printf("  gravity is on %c%c   (%.3f m/s^2)\r\n",
                 st.mean_a[dominant] > 0 ? '+' : '-', 'X' + dominant,
                 st.mean_a[dominant]);
 
   if (fabs(mag - kGravity) > 0.3) {
-    Serial.printf("  WARNING |a| is %.3f, expected 9.81 +-0.3\n", mag);
+    Serial.printf("  WARNING |a| is %.3f, expected 9.81 +-0.3\r\n", mag);
     Serial.println("  ~19.6 or ~4.9 means the wrong range in the scale factor.");
   }
   Serial.println("  >> Write this down: orientation -> axis and sign.");
@@ -319,16 +319,16 @@ void calibrateGyro() {
   const Stats st = collect(2.0);
 
   if (st.count < 100) {
-    Serial.printf("  FAIL -- only %ld samples; is the IMU responding?\n",
+    Serial.printf("  FAIL -- only %ld samples; is the IMU responding?\r\n",
                   st.count);
     return;
   }
 
   const double worst_sd = fmax(st.sd_g[0], fmax(st.sd_g[1], st.sd_g[2]));
-  Serial.printf("  samples=%ld  worst sd=%.5f rad/s\n", st.count, worst_sd);
+  Serial.printf("  samples=%ld  worst sd=%.5f rad/s\r\n", st.count, worst_sd);
 
   if (worst_sd > kMaxStationarySd) {
-    Serial.printf("  FAIL -- moved during calibration (sd %.5f > %.5f)\n",
+    Serial.printf("  FAIL -- moved during calibration (sd %.5f > %.5f)\r\n",
                   worst_sd, kMaxStationarySd);
     Serial.println("  The mean would be bias PLUS real rotation.  Retry still.");
     return;
@@ -337,9 +337,9 @@ void calibrateGyro() {
   for (int i = 0; i < 3; i++) { gyro_bias[i] = st.mean_g[i]; }
   gyro_bias_valid = true;
 
-  Serial.printf("  bias = %+.6f %+.6f %+.6f rad/s\n",
+  Serial.printf("  bias = %+.6f %+.6f %+.6f rad/s\r\n",
                 gyro_bias[0], gyro_bias[1], gyro_bias[2]);
-  Serial.printf("  temperature = %.1f C  <-- record this; bias moves with it\n",
+  Serial.printf("  temperature = %.1f C  <-- record this; bias moves with it\r\n",
                 readTemperature());
   Serial.println("  PASS");
 }
@@ -347,7 +347,7 @@ void calibrateGyro() {
 // Step 6 -- one of the six accelerometer positions.
 void captureAccelPosition(int axis, bool positive) {
   Serial.println();
-  Serial.printf("--- Accel position: %c%c up ---\n",
+  Serial.printf("--- Accel position: %c%c up ---\r\n",
                 positive ? '+' : '-', 'X' + axis);
   countdown("position", 3);
   const Stats st = collect(2.0);
@@ -356,12 +356,12 @@ void captureAccelPosition(int axis, bool positive) {
   // taken while the board was moving is worse than no correction.
   const double worst_sd = fmax(st.sd_a[0], fmax(st.sd_a[1], st.sd_a[2]));
   if (worst_sd > 0.5) {
-    Serial.printf("  FAIL -- moved (accel sd %.3f m/s^2).  Retry.\n", worst_sd);
+    Serial.printf("  FAIL -- moved (accel sd %.3f m/s^2).  Retry.\r\n", worst_sd);
     return;
   }
 
   const double value = st.mean_a[axis];
-  Serial.printf("  %c axis reads %+.4f m/s^2 (sd %.4f)\n",
+  Serial.printf("  %c axis reads %+.4f m/s^2 (sd %.4f)\r\n",
                 'X' + axis, value, st.sd_a[axis]);
 
   if (positive) {
@@ -387,7 +387,7 @@ void showAccelFit() {
   bool complete = true;
   for (int i = 0; i < 3; i++) {
     if (isnan(axis_max[i]) || isnan(axis_min[i])) {
-      Serial.printf("  %c: MISSING (%s%s)\n", 'X' + i,
+      Serial.printf("  %c: MISSING (%s%s)\r\n", 'X' + i,
                     isnan(axis_max[i]) ? "+ " : "",
                     isnan(axis_min[i]) ? "-" : "");
       complete = false;
@@ -403,10 +403,10 @@ void showAccelFit() {
   for (int i = 0; i < 3; i++) {
     const double offset = (axis_max[i] + axis_min[i]) / 2.0;
     const double scale = (axis_max[i] - axis_min[i]) / (2.0 * kGravity);
-    Serial.printf("    -D ACCEL_OFFSET_%c=%.6f\n", 'X' + i, offset);
-    Serial.printf("    -D ACCEL_SCALE_%c=%.6f\n", 'X' + i, scale);
+    Serial.printf("    -D ACCEL_OFFSET_%c=%.6f\r\n", 'X' + i, offset);
+    Serial.printf("    -D ACCEL_SCALE_%c=%.6f\r\n", 'X' + i, scale);
     if (fabs(scale - 1.0) > 0.05) {
-      Serial.printf("  ; WARNING %c scale %.4f is far from 1.0\n",
+      Serial.printf("  ; WARNING %c scale %.4f is far from 1.0\r\n",
                     'X' + i, scale);
     }
   }
@@ -419,9 +419,9 @@ void showSummary() {
   Serial.println("; paste into platformio.ini build_flags");
 
   if (gyro_bias_valid) {
-    Serial.printf("    -D GYRO_BIAS_X=%.6f\n", gyro_bias[0]);
-    Serial.printf("    -D GYRO_BIAS_Y=%.6f\n", gyro_bias[1]);
-    Serial.printf("    -D GYRO_BIAS_Z=%.6f\n", gyro_bias[2]);
+    Serial.printf("    -D GYRO_BIAS_X=%.6f\r\n", gyro_bias[0]);
+    Serial.printf("    -D GYRO_BIAS_Y=%.6f\r\n", gyro_bias[1]);
+    Serial.printf("    -D GYRO_BIAS_Z=%.6f\r\n", gyro_bias[2]);
   } else {
     Serial.println("  ; gyro NOT calibrated -- run [2]");
   }
@@ -478,7 +478,7 @@ void verifyGyro() {
   bool pass = true;
   for (int i = 0; i < 3; i++) {
     const double corrected = st.mean_g[i] - gyro_bias[i];
-    Serial.printf("    %c: %+.6f%s\n", 'X' + i, corrected,
+    Serial.printf("    %c: %+.6f%s\r\n", 'X' + i, corrected,
                   fabs(corrected) < 0.002 ? "" : "   <-- HIGH");
     if (fabs(corrected) >= 0.002) { pass = false; }
   }
@@ -503,7 +503,7 @@ void setup() {
   delay(1);
 
   const uint8_t id = readReg(kRegChipId);
-  Serial.printf("CHIP_ID = 0x%02X\n", id);
+  Serial.printf("CHIP_ID = 0x%02X\r\n", id);
   if (id != kChipIdBmi270) {
     Serial.println("FAIL -- expected 0x24.  Re-run imu_spi_test.");
     while (true) { delay(1000); }
@@ -518,7 +518,7 @@ void setup() {
   configureSensors();
   settings = SPISettings(kSpiHzData, MSBFIRST, SPI_MODE0);
 
-  Serial.printf("ready -- accel +-2g, gyro +-500dps, 400 Hz, %.1f C\n",
+  Serial.printf("ready -- accel +-2g, gyro +-500dps, 400 Hz, %.1f C\r\n",
                 readTemperature());
   printMenu();
 }

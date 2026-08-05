@@ -21,8 +21,8 @@ void setup() {
   // 600000000 confirms the clock.  sizeof(double) == 8 confirms the
   // VFPv5 double-precision FPU that core/'s control math relies on --
   // if this printed 4, every double would be software-emulated.
-  Serial.printf("F_CPU          = %lu Hz\n", (unsigned long)F_CPU);
-  Serial.printf("sizeof(double) = %u\n", (unsigned)sizeof(double));
+  Serial.printf("F_CPU          = %lu Hz\r\n", (unsigned long)F_CPU);
+  Serial.printf("sizeof(double) = %u\r\n", (unsigned)sizeof(double));
 }
 
 void loop() {
@@ -36,6 +36,6 @@ void loop() {
   digitalWrite(LED_BUILTIN, LOW);
   delay(800);
 
-  Serial.printf("tick %lu  millis=%lu\n",
+  Serial.printf("tick %lu  millis=%lu\r\n",
                 (unsigned long)n++, (unsigned long)millis());
 }

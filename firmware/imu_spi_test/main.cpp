@@ -74,7 +74,7 @@ void setup() {
 
   const uint8_t id = readReg(kRegChipId);
 
-  Serial.printf("CHIP_ID = 0x%02X   (expect 0x%02X)\n", id, kChipIdBmi270);
+  Serial.printf("CHIP_ID = 0x%02X   (expect 0x%02X)\r\n", id, kChipIdBmi270);
 
   if (id == kChipIdBmi270) {
     Serial.println("PASS -- BMI270 responding over SPI");

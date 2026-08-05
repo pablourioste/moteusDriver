@@ -266,7 +266,7 @@ void loop() {
       (temp_raw == static_cast<int16_t>(0x8000)) ? NAN
                                                  : (temp_raw / 512.0) + 23.0;
 
-  Serial.printf("%8.3f%8.3f%8.3f | %7.3f%7.3f%7.3f | %7.3f%7.1f\n",
+  Serial.printf("%8.3f%8.3f%8.3f | %7.3f%7.3f%7.3f | %7.3f%7.1f\r\n",
                 ax, ay, az, gx, gy, gz, a_mag, temp_c);
 
   delay(100);                               // 10 Hz -- readable by eye
