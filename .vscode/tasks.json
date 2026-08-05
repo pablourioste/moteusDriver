@@ -38,6 +38,77 @@
             "problemMatcher": [],
             "group": "test",
             "detail": "Run the moteus library unit tests."
+        },
+        {
+            "type": "shell",
+            "label": "telemetry: build firmware",
+            "command": "pio",
+            "args": ["run", "-e", "telemetry_test"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": ["$gcc"],
+            "detail": "Build the binary-telemetry Teensy sketch. Flash the resulting .pio/build/telemetry_test/firmware.hex from Windows -- upload reboots into HalfKay, which drops any usbipd attachment."
+        },
+        {
+            "type": "shell",
+            "label": "telemetry: capture",
+            "command": "python.exe",
+            "args": [
+                "tools/telemetry/capture.py",
+                "--port", "${input:comPort}",
+                "--seconds", "${input:captureSeconds}",
+                "--live"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "detail": "Capture to logs/telemetry_<stamp>.bin. Runs under WINDOWS python (COM ports are Windows devices) but is invoked straight from the WSL terminal -- no PowerShell window needed."
+        },
+        {
+            "type": "shell",
+            "label": "telemetry: decode latest",
+            "command": "./moteus-venv/bin/python",
+            "args": [
+                "tools/telemetry/decode.py",
+                "$(ls -t logs/telemetry_*.bin | head -1)",
+                "--parquet"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "detail": "Decode the newest capture to Parquet, printing the CRC/loss summary."
+        },
+        {
+            "type": "shell",
+            "label": "telemetry: replay live",
+            "command": "./moteus-venv/bin/python",
+            "args": [
+                "tools/telemetry/live.py",
+                "$(ls -t logs/telemetry_*.bin | head -1)",
+                "--speed", "1.0"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "detail": "Replay the newest capture through the live display. No hardware needed."
+        }
+    ],
+    "inputs": [
+        {
+            "id": "comPort",
+            "type": "promptString",
+            "description": "Serial port (Windows COM name, e.g. COM9)",
+            "default": "COM9"
+        },
+        {
+            "id": "captureSeconds",
+            "type": "promptString",
+            "description": "Capture duration in seconds (0 = until Ctrl-C)",
+            "default": "60"
         }
     ]
 }

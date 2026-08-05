@@ -66,6 +66,41 @@ std::int16_t ToInt16(const std::uint8_t* p) {
 
 }  // namespace
 
+// Each field is guarded independently: a build that defines only some of
+// the macros still gets the identity transform for the rest, rather than
+// failing to compile or silently zeroing a calibrated axis.
+ImuDriver::Config ImuDriver::Config::FromBuildDefaults() {
+  Config config;
+#ifdef DEFAULT_IMU_GYRO_BIAS_X
+  config.gyro_bias_x = DEFAULT_IMU_GYRO_BIAS_X;
+#endif
+#ifdef DEFAULT_IMU_GYRO_BIAS_Y
+  config.gyro_bias_y = DEFAULT_IMU_GYRO_BIAS_Y;
+#endif
+#ifdef DEFAULT_IMU_GYRO_BIAS_Z
+  config.gyro_bias_z = DEFAULT_IMU_GYRO_BIAS_Z;
+#endif
+#ifdef DEFAULT_IMU_ACCEL_OFFSET_X
+  config.accel_offset_x = DEFAULT_IMU_ACCEL_OFFSET_X;
+#endif
+#ifdef DEFAULT_IMU_ACCEL_OFFSET_Y
+  config.accel_offset_y = DEFAULT_IMU_ACCEL_OFFSET_Y;
+#endif
+#ifdef DEFAULT_IMU_ACCEL_OFFSET_Z
+  config.accel_offset_z = DEFAULT_IMU_ACCEL_OFFSET_Z;
+#endif
+#ifdef DEFAULT_IMU_ACCEL_SCALE_X
+  config.accel_scale_x = DEFAULT_IMU_ACCEL_SCALE_X;
+#endif
+#ifdef DEFAULT_IMU_ACCEL_SCALE_Y
+  config.accel_scale_y = DEFAULT_IMU_ACCEL_SCALE_Y;
+#endif
+#ifdef DEFAULT_IMU_ACCEL_SCALE_Z
+  config.accel_scale_z = DEFAULT_IMU_ACCEL_SCALE_Z;
+#endif
+  return config;
+}
+
 ImuDriver::ImuDriver() = default;
 
 ImuDriver::ImuDriver(const Config& config) : config_(config) {}
@@ -184,6 +219,28 @@ bool ImuDriver::initialize(std::string* error) {
     return false;
   };
 
+  // Validate the accel scales before touching the bus.  read() divides by
+  // these, so a zero left in by a mis-transcribed build flag would produce
+  // infinities that propagate into the estimator -- and unlike the NaN
+  // sentinels elsewhere, that failure is silent: an infinite accel angle
+  // just makes theta useless without ever tripping a comparison.  A scale
+  // far from 1.0 means the fit was taken at the wrong range and is a
+  // transcription error, not a real part-to-part variation.
+  {
+    const double scales[3] = {config_.accel_scale_x, config_.accel_scale_y,
+                              config_.accel_scale_z};
+    const char* axis_names[3] = {"x", "y", "z"};
+    for (int i = 0; i < 3; i++) {
+      if (!std::isfinite(scales[i]) || std::fabs(scales[i] - 1.0) > 0.5) {
+        return fail("accel_scale_" + std::string(axis_names[i]) + " is " +
+                    std::to_string(scales[i]) +
+                    ", which is not a plausible calibration gain (expected "
+                    "near 1.0).\nRe-run firmware/imu_calibrate menu [f] and "
+                    "check the transcribed build flags.");
+      }
+    }
+  }
+
   fd_ = ::open(config_.i2c_device.c_str(), O_RDWR);
   if (fd_ < 0) {
     return fail("cannot open " + config_.i2c_device + ": " +
@@ -279,9 +336,27 @@ ImuData ImuDriver::read() {
     return data;
   }
 
-  data.accel_x = ToInt16(&buffer[0]) * accel_scale_;
-  data.accel_y = ToInt16(&buffer[2]) * accel_scale_;
-  data.accel_z = ToInt16(&buffer[4]) * accel_scale_;
+  // Two different corrections apply here, in a fixed order:
+  //
+  //   raw counts --> x accel_scale_ --> - offset --> / scale --> m/s^2
+  //                  (LSB->SI, from    (six-position fit, from
+  //                   the range)        imu_calibrate [f])
+  //
+  // accel_scale_ and config_.accel_scale_* are NOT the same thing despite
+  // the similar names: the first converts counts to SI using the configured
+  // range, the second corrects this individual part's gain error and is
+  // near 1.0.  Applying them in the other order would scale the offset too,
+  // and the offset is in m/s^2, not counts.
+  //
+  // Bmi270SpiDriver::read() must do this identically -- the two drivers
+  // consume the same calibration numbers, so a divergence here would mean
+  // the host simulation and the Teensy disagreed about gravity.
+  data.accel_x = (ToInt16(&buffer[0]) * accel_scale_ - config_.accel_offset_x) /
+                 config_.accel_scale_x;
+  data.accel_y = (ToInt16(&buffer[2]) * accel_scale_ - config_.accel_offset_y) /
+                 config_.accel_scale_y;
+  data.accel_z = (ToInt16(&buffer[4]) * accel_scale_ - config_.accel_offset_z) /
+                 config_.accel_scale_z;
 
   data.gyro_x = ToInt16(&buffer[6]) * gyro_scale_ - config_.gyro_bias_x;
   data.gyro_y = ToInt16(&buffer[8]) * gyro_scale_ - config_.gyro_bias_y;

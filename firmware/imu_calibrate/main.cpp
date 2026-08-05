@@ -69,6 +69,20 @@ constexpr uint32_t kSamplePeriodUs = 2500;   // 400 Hz, matching the ODR
 // motion detector, not a noise floor.  From ImuDriver.cpp:356.
 constexpr double kMaxStationarySd = 0.02;    // rad/s
 
+// Squareness limit for the six-position captures.  A face resting
+// theta off square reads g*cos(theta) on the target axis and
+// g*sin(theta) spread across the other two.
+//
+// 3 deg -> off-axis 0.51 m/s^2, but only 0.013 m/s^2 (0.14%) lost on
+// the target axis.  That is below the sensor's own offset, so a
+// capture that passes cannot meaningfully distort the fit.
+//
+// Sized from the 2026-08-05 session, where +Y up came in at 9.5244
+// (14 deg off) and was silently accepted by the old +-5.0 check --
+// producing ACCEL_OFFSET_Y = -0.194 that was tilt, not sensor offset.
+constexpr double kMaxTiltDeg = 3.0;
+constexpr double kMaxOffAxis = kGravity * 0.05234;   // sin(3 deg)
+
 double accel_scale = 0.0;
 double gyro_scale = 0.0;
 
@@ -260,16 +274,36 @@ void countdown(const char* what, int seconds) {
 
 // ------------------------------------------------------------ actions
 
+// Doubles as the positioning aid for step 6: `tilt` is the angle away
+// from the nearest axis, so squaring a face up is "make tilt small"
+// rather than eyeballing which two columns ought to be near zero.
 void showLive() {
   Serial.println();
   Serial.println("Live stream -- send any key to stop.");
-  Serial.println("      ax      ay      az   |     gx      gy      gz   |    |a|");
+  Serial.printf("Positioning for [1]..[6]: get tilt under %.0f deg.\r\n",
+                kMaxTiltDeg);
+  Serial.println(
+      "      ax      ay      az   |     gx      gy      gz   |    |a|   tilt");
   while (!Serial.available()) {
     const Sample s = readSample();
     const double mag =
         sqrt(s.a[0] * s.a[0] + s.a[1] * s.a[1] + s.a[2] * s.a[2]);
-    Serial.printf("%8.3f%8.3f%8.3f | %7.3f%7.3f%7.3f | %7.3f\r\n",
-                  s.a[0], s.a[1], s.a[2], s.g[0], s.g[1], s.g[2], mag);
+
+    // Tilt relative to whichever axis gravity is closest to -- the
+    // same off-axis measure captureAccelPosition() gates on.
+    int dominant = 0;
+    for (int i = 1; i < 3; i++) {
+      if (fabs(s.a[i]) > fabs(s.a[dominant])) { dominant = i; }
+    }
+    double off_sq = 0.0;
+    for (int i = 0; i < 3; i++) {
+      if (i != dominant) { off_sq += s.a[i] * s.a[i]; }
+    }
+    const double tilt = atan2(sqrt(off_sq), fabs(s.a[dominant])) / kDegToRad;
+
+    Serial.printf("%8.3f%8.3f%8.3f | %7.3f%7.3f%7.3f | %7.3f %5.1f%s\r\n",
+                  s.a[0], s.a[1], s.a[2], s.g[0], s.g[1], s.g[2], mag, tilt,
+                  tilt <= kMaxTiltDeg ? "  OK" : "");
     delay(100);
   }
   while (Serial.available()) { Serial.read(); }
@@ -364,17 +398,58 @@ void captureAccelPosition(int axis, bool positive) {
   Serial.printf("  %c axis reads %+.4f m/s^2 (sd %.4f)\r\n",
                 'X' + axis, value, st.sd_a[axis]);
 
+  // Gross orientation check: is the board even on the right face?
+  // Catches "+X up" pressed while the board is -X up, which the
+  // 2026-08-05 session hit (read -9.8129 for +X up).
+  if (positive && value < 5.0) {
+    Serial.println("  FAIL -- expected about +9.81.  Wrong orientation?");
+    return;
+  }
+  if (!positive && value > -5.0) {
+    Serial.println("  FAIL -- expected about -9.81.  Wrong orientation?");
+    return;
+  }
+
+  // SQUARENESS CHECK -- the one the 2026-08-05 session needed.
+  //
+  // Deliberately measured on the OFF-AXIS components, not on the
+  // target axis, because those two failures look identical on the
+  // target axis alone but must be treated oppositely:
+  //
+  //   sensor offset  shifts +X and -X the SAME direction.  It is
+  //                  exactly what we are here to measure -- never
+  //                  reject it, however large.
+  //   tilt by theta  scales the reading by cos(theta), so it can
+  //                  only ever REDUCE both magnitudes.  It is a
+  //                  positioning mistake and must be rejected.
+  //
+  // Judging by "is the target axis near 9.81?" cannot separate them:
+  // it would reject a big genuine offset and accept a small tilt.
+  // The off-axis magnitude is blind to offset on the target axis and
+  // grows as sin(theta), so it isolates tilt cleanly.
+  double off_axis_sq = 0.0;
+  for (int i = 0; i < 3; i++) {
+    if (i != axis) { off_axis_sq += st.mean_a[i] * st.mean_a[i]; }
+  }
+  const double off_axis = sqrt(off_axis_sq);
+  const double tilt_deg = atan2(off_axis, fabs(value)) / kDegToRad;
+
+  Serial.printf("  off-axis = %.4f m/s^2  (tilt %.1f deg)\r\n",
+                off_axis, tilt_deg);
+
+  if (off_axis > kMaxOffAxis) {
+    Serial.printf("  FAIL -- not square: tilted %.1f deg (limit %.1f).\r\n",
+                  tilt_deg, kMaxTiltDeg);
+    Serial.println("  Tilt scales the reading by cos(theta), so this would");
+    Serial.println("  be absorbed as a fake offset and scale.  Reposition");
+    Serial.println("  against something square and retry.");
+    Serial.println("  Tip: [l] live stream, get the OTHER two axes near 0.");
+    return;
+  }
+
   if (positive) {
-    if (value < 5.0) {
-      Serial.println("  FAIL -- expected about +9.81.  Wrong orientation?");
-      return;
-    }
     axis_max[axis] = value;
   } else {
-    if (value > -5.0) {
-      Serial.println("  FAIL -- expected about -9.81.  Wrong orientation?");
-      return;
-    }
     axis_min[axis] = value;
   }
   Serial.println("  captured");
@@ -396,6 +471,24 @@ void showAccelFit() {
   if (!complete) {
     Serial.println("  Capture all six positions first.");
     return;
+  }
+
+  // Report the raw pair each axis was fitted from, so a suspicious
+  // flag can be traced back to the two captures that produced it
+  // without re-reading the whole session log.
+  //
+  // A LARGE offset here is a finding, not a fault: it is the sensor's
+  // genuine zero error and correcting it is the entire point.  What
+  // would be wrong is a large offset paired with BOTH magnitudes low,
+  // which means tilt leaked in -- and the squareness check at capture
+  // time is what prevents that.
+  Serial.println();
+  Serial.println("  axis      +g        -g     offset    scale");
+  for (int i = 0; i < 3; i++) {
+    const double offset = (axis_max[i] + axis_min[i]) / 2.0;
+    const double scale = (axis_max[i] - axis_min[i]) / (2.0 * kGravity);
+    Serial.printf("    %c   %+8.4f  %+8.4f  %+8.4f  %7.5f\r\n",
+                  'X' + i, axis_max[i], axis_min[i], offset, scale);
   }
 
   Serial.println();

@@ -74,7 +74,10 @@ void PrintUsage(const char* argv0) {
 
 int main(int argc, char** argv) {
   auto moteus_config = cube::MoteusConfig::FromBuildDefaults();
-  cube::ImuDriver::Config imu_config;
+  // Carries the measured gyro bias and accel offset/scale from the CMake
+  // cache.  A default-constructed Config would be the identity transform --
+  // an uncalibrated sensor feeding the balancing law.
+  auto imu_config = cube::ImuDriver::Config::FromBuildDefaults();
   cube::BalancingController::Config control_config;
   cube::StateEstimator::Config estimator_config;
 

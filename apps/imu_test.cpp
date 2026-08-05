@@ -47,7 +47,12 @@ void PrintUsage(const char* argv0) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  cube::ImuDriver::Config config;
+  // FromBuildDefaults() rather than a plain Config: it carries the measured
+  // gyro bias and accel offset/scale from the CMake cache.  A
+  // default-constructed Config is the identity transform, i.e. an
+  // UNcalibrated sensor -- which for this program would mean reporting a
+  // tilt that is quietly wrong by whatever the offsets are.
+  auto config = cube::ImuDriver::Config::FromBuildDefaults();
 
   // Seed from the build-time defaults so -DIMU_I2C_DEVICE at configure time
   // actually takes effect; --device/--address still override per run.

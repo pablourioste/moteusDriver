@@ -78,6 +78,40 @@ class ImuDriver : public IImuSensor {
     double gyro_bias_x = 0.0;
     double gyro_bias_y = 0.0;
     double gyro_bias_z = 0.0;
+
+    // Accelerometer offset (m/s^2) and scale (dimensionless), per axis,
+    // applied as  a_corrected = (a_raw - offset) / scale.
+    //
+    // These come from the six-position fit in firmware/imu_calibrate --
+    // menu [1]..[6] then [f], which prints them as paste-ready build flags.
+    // The fit works because gravity is a known-magnitude reference: with
+    // +X up and -X up you get two readings whose midpoint is the zero
+    // offset and whose half-span should be exactly g.  Whatever it is
+    // instead of g is the scale error.
+    //
+    // Defaults are the identity transform, so an uncalibrated build behaves
+    // exactly as it did before these fields existed.  A scale of 0.0 would
+    // divide by zero, so it defaults to 1.0, not 0.0, unlike the biases.
+    //
+    // NOT covered here: mounting misalignment.  If the IMU sits a fraction
+    // of a degree off the body frame that is a ROTATION, not a per-axis
+    // offset, and folding it in here corrupts both corrections.  Measure it
+    // at assembly and apply it after this.
+    double accel_offset_x = 0.0;
+    double accel_offset_y = 0.0;
+    double accel_offset_z = 0.0;
+    double accel_scale_x = 1.0;
+    double accel_scale_y = 1.0;
+    double accel_scale_z = 1.0;
+
+    // Config carrying the calibration baked in at build time by the CMake
+    // cache variables (IMU_GYRO_BIAS_*, IMU_ACCEL_OFFSET_*,
+    // IMU_ACCEL_SCALE_*).  Mirrors MoteusConfig::FromBuildDefaults().
+    //
+    // Prefer this over a default-constructed Config anywhere the real
+    // sensor is read: a plain Config{} is the identity transform, which
+    // means an uncalibrated sensor rather than a calibrated one.
+    static Config FromBuildDefaults();
   };
 
   ImuDriver();

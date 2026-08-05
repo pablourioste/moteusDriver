@@ -1,0 +1,12 @@
+# Capture-side dependencies -- install under WINDOWS Python, because COM9
+# is a Windows device:
+#
+#   python.exe -m pip install -r tools/telemetry/requirements-capture.txt
+#
+# Deliberately minimal.  capture.py never parses a frame, so it needs
+# nothing beyond a serial port; keeping it this light is what lets it run
+# under a bare Windows Python with no scientific stack installed.
+#
+# Not needed at all once telemetry arrives over UDP -- the stdlib socket
+# module covers that, and capture runs in WSL like everything else.
+pyserial>=3.5

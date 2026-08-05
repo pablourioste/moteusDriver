@@ -1,0 +1,14 @@
+# Analysis-side dependencies -- install into moteus-venv, under WSL:
+#
+#   ./moteus-venv/bin/pip install -r tools/telemetry/requirements-host.txt
+#
+# numpy, scipy, matplotlib, pyserial and ipykernel are already present in
+# moteus-venv (it was created for moteus_tool and tview), so only these two
+# are actually new.
+#
+# pyarrow is what makes Parquet output work.  Parquet over CSV because the
+# frame is strongly typed and columnar: a 60 s capture at 400 Hz is 24k
+# rows x 38 columns, roughly 5x smaller than the equivalent CSV and it
+# round-trips dtypes instead of re-parsing floats from text.
+pandas>=2.0
+pyarrow>=14.0

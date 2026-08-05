@@ -23,3 +23,9 @@ moteus/
 
 # PlatformIO build output (Teensy firmware)
 .pio/
+
+# Telemetry post-processing.  The raw .bin captures already fall under
+# logs/ above; these are the derived artefacts, regenerable from the .bin
+# by decode.py and therefore not worth versioning either.
+*.parquet
+tools/telemetry/__pycache__/

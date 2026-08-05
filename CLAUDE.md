@@ -31,7 +31,12 @@ include/core/           PLATFORM-AGNOSTIC control code -- no hardware headers
   Types.hpp                 ImuData, MotorState, BodyState
   StateEstimator.hpp        SCAFFOLD: complementary filter
   BalancingController.hpp   SCAFFOLD: LQR + safety envelope
+  TelemetryFrame.hpp        118-byte binary wire format + CRC-16
+  TelemetryRing.hpp         lock-free SPSC ring, O(1) push
+  TelemetrySink.hpp         sink interface + drain policy (USB -> Xiao seam)
   interfaces/               IImuSensor, IMotorDriver
+tests/test_telemetry_ring.cpp  frame/ring/drain tests, no Boost, no hardware
+tools/telemetry/        capture.py, decode.py, scale.py, live.py, analyze.ipynb
 include/drivers/        HARDWARE implementations of those interfaces
   MoteusConfig.hpp          config struct mirroring the CMake cache vars
   MoteusDriverWrapper.hpp   moteus over CAN-FD
@@ -88,6 +93,11 @@ erroring.
 | `cube_balancer` | `apps/cube_balancer.cpp` | 200 Hz balancing loop |
 | `moteus_driver` | `apps/legacy_moteus_driver.cpp` | constant-velocity driver |
 | `moteus_test` | upstream | Boost.Test suite for the moteus library |
+| `test_telemetry_ring` | `tests/` | frame/ring/drain tests; also `--emit` fixtures |
+
+Teensy firmware envs relevant here: `pio run -e telemetry_test` builds the
+binary-telemetry sketch. It **emits binary, not text** — opening it in a
+serial monitor shows garbage and can block the capture.
 
 ```bash
 cmake -S . -B build          # from project root, NOT from inside build/

@@ -237,6 +237,38 @@ set(IMU_I2C_DEVICE "/dev/i2c-1" CACHE STRING
 set(IMU_I2C_ADDRESS 0x68 CACHE STRING
     "BMI270 I2C address (0x68 with SDO low, 0x69 with SDO high)")
 
+# IMU calibration, measured per physical part -- never guessed.
+#
+# Produced by firmware/imu_calibrate: menu [g] for the gyro biases, and
+# [1]..[6] then [f] for the six-position accel fit.  That sketch prints them
+# as PlatformIO build flags for the Teensy build; these cache variables are
+# the same numbers for the host build, so both targets correct the same
+# sensor identically.  Keep them in step -- a divergence means the host
+# simulation and the rig disagree about which way gravity points.
+#
+# Values below are the measured calibration of THIS sensor, from
+# data/imu_calibration/imu-cal-20260805T125013.log (bench, 23.5 C).
+# They are not identity: replacing this board means re-running
+# imu_calibrate and updating both here and platformio.ini.
+set(IMU_GYRO_BIAS_X 0.002348 CACHE STRING "Gyro X zero-rate offset, rad/s")
+set(IMU_GYRO_BIAS_Y -0.001140 CACHE STRING "Gyro Y zero-rate offset, rad/s")
+set(IMU_GYRO_BIAS_Z -0.000762 CACHE STRING "Gyro Z zero-rate offset, rad/s")
+
+# The Y offset is ~2% of g.  That is a real sensor zero error, not a
+# tilted capture: tilt can only ever REDUCE a magnitude (it scales by
+# cos theta), yet -Y read 9.9152 and +Z read 9.8945, both ABOVE g.
+# The pairs are shifted, not shrunk.  See the log's README.
+set(IMU_ACCEL_OFFSET_X -0.092282 CACHE STRING "Accel X offset, m/s^2")
+set(IMU_ACCEL_OFFSET_Y -0.196510 CACHE STRING "Accel Y offset, m/s^2")
+set(IMU_ACCEL_OFFSET_Z 0.050664 CACHE STRING "Accel Z offset, m/s^2")
+
+# Gain corrections, near 1.0.  A value far from 1.0 is a transcription
+# error or a fit taken at the wrong range, and ImuDriver::initialize()
+# refuses to start on one rather than dividing by it.
+set(IMU_ACCEL_SCALE_X 0.991085 CACHE STRING "Accel X gain correction (~1.0)")
+set(IMU_ACCEL_SCALE_Y 0.991035 CACHE STRING "Accel Y gain correction (~1.0)")
+set(IMU_ACCEL_SCALE_Z 1.003787 CACHE STRING "Accel Z gain correction (~1.0)")
+
 # The BMI270 keeps its accelerometer and gyroscope disabled until Bosch's
 # ~8 KB config blob is uploaded, so the IMU driver cannot produce data without
 # it.  third_party/bmi270_config.h holds that blob, extracted from the
@@ -254,9 +286,15 @@ option(BMI270_CONFIG_HEADER
        ${BMI270_BLOB_DEFAULT})
 
 # Core control library.  No hardware dependencies at all.
+#
+# TelemetryFrame.cpp is deliberately here rather than under drivers/: the
+# wire format is compiled by BOTH build systems (this one for the host,
+# PlatformIO for the Teensy) and the static_assert on sizeof is what proves
+# the two toolchains agree about the layout.
 add_library(cube_core STATIC
   src/core/StateEstimator.cpp
-  src/core/BalancingController.cpp)
+  src/core/BalancingController.cpp
+  src/core/TelemetryFrame.cpp)
 target_compile_options(cube_core PRIVATE -Wall -Wextra)
 target_include_directories(cube_core
   PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -277,7 +315,19 @@ target_compile_definitions(cube_drivers PRIVATE
   COMMAND_WATCHDOG_S=${COMMAND_WATCHDOG_S}
   ROTOR_TO_OUTPUT_RATIO_DEF=${ROTOR_TO_OUTPUT_RATIO}
   APPLY_CONFIG_ON_STARTUP=$<BOOL:${APPLY_CONFIG_ON_STARTUP}>
-  PERSIST_CONFIG_TO_FLASH=$<BOOL:${PERSIST_CONFIG_TO_FLASH}>)
+  PERSIST_CONFIG_TO_FLASH=$<BOOL:${PERSIST_CONFIG_TO_FLASH}>
+  # IMU calibration.  Defined on the library rather than on each app so
+  # every binary that reads the IMU corrects it the same way -- an app that
+  # forgot one of these would silently read an uncalibrated sensor.
+  DEFAULT_IMU_GYRO_BIAS_X=${IMU_GYRO_BIAS_X}
+  DEFAULT_IMU_GYRO_BIAS_Y=${IMU_GYRO_BIAS_Y}
+  DEFAULT_IMU_GYRO_BIAS_Z=${IMU_GYRO_BIAS_Z}
+  DEFAULT_IMU_ACCEL_OFFSET_X=${IMU_ACCEL_OFFSET_X}
+  DEFAULT_IMU_ACCEL_OFFSET_Y=${IMU_ACCEL_OFFSET_Y}
+  DEFAULT_IMU_ACCEL_OFFSET_Z=${IMU_ACCEL_OFFSET_Z}
+  DEFAULT_IMU_ACCEL_SCALE_X=${IMU_ACCEL_SCALE_X}
+  DEFAULT_IMU_ACCEL_SCALE_Y=${IMU_ACCEL_SCALE_Y}
+  DEFAULT_IMU_ACCEL_SCALE_Z=${IMU_ACCEL_SCALE_Z})
 
 if(BMI270_CONFIG_HEADER)
   target_compile_definitions(cube_drivers PRIVATE HAVE_BMI270_CONFIG_BLOB)
@@ -381,6 +431,16 @@ target_link_libraries(moteus_driver PRIVATE moteus_lib Threads::Threads)
 # installed the tests are simply skipped rather than failing the build.
 #   sudo apt install libboost-test-dev
 enable_testing()
+
+# First-party telemetry tests.  No Boost, no gtest -- plain asserts and an
+# exit code, so these always run even where the optional Boost.Test
+# dependency below is unavailable.  The telemetry layer is precisely the
+# thing that must not go unverified: a bug here silently corrupts every
+# log downstream.  Needs no hardware.
+add_executable(test_telemetry_ring tests/test_telemetry_ring.cpp)
+target_compile_options(test_telemetry_ring PRIVATE -Wall -Wextra)
+target_link_libraries(test_telemetry_ring PRIVATE cube_core)
+add_test(NAME test_telemetry_ring COMMAND test_telemetry_ring)
 
 find_package(Boost QUIET COMPONENTS unit_test_framework)
 if(Boost_FOUND AND TARGET Boost::unit_test_framework)
