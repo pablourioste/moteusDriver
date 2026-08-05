@@ -1,0 +1,127 @@
+=~=~=~=~=~=~=~=~=~=~=~= PuTTY log 2026.08.05 12:50:13 =~=~=~=~=~=~=~=~=~=~=~=
+
+=== BMI270 calibration ===
+CHIP_ID = 0x24
+uploading config blob...
+ready -- accel +-2g, gyro +-500dps, 400 Hz, 23.7 C
+
+=== BMI270 calibration ===
+  l  live stream
+  m  axis mapping        (step 4b)
+  g  gyro bias           (step 5)
+  v  verify gyro at rest
+  1  accel  +X up        (step 6)
+  2  accel  -X up
+  3  accel  +Y up
+  4  accel  -Y up
+  5  accel  +Z up (flat)
+  6  accel  -Z up (upside down)
+  f  accel fit
+  s  summary -- paste-ready flags
+  ?  this menu
+g
+
+--- Gyro bias (step 5) ---
+  Solid, level, still surface.  Not your hand.
+  gyro -- hold still: 3 2 1 measuring...
+  samples=796  worst sd=0.00142 rad/s
+  bias = +0.002348 -0.001140 -0.000762 rad/s
+  temperature = 23.5 C  <-- record this; bias moves with it
+  PASS
+v
+
+--- Verify gyro at rest ---
+  verification -- hold still: 3 2 1 measuring...
+  corrected means (should be < 0.002 rad/s):
+    X: -0.000086
+    Y: +0.000018
+    Z: -0.000144
+  PASS
+1
+
+--- Accel position: +X up ---
+  position -- hold still: 3 2 1 measuring...
+  X axis reads +9.6269 m/s^2 (sd 0.0160)
+  off-axis = 0.1710 m/s^2  (tilt 1.0 deg)
+  captured
+2
+
+--- Accel position: -X up ---
+  position -- hold still: 3 2 1 measuring...
+  X axis reads -9.8115 m/s^2 (sd 0.0151)
+  off-axis = 0.2631 m/s^2  (tilt 1.5 deg)
+  captured
+3
+
+--- Accel position: +Y up ---
+  position -- hold still: 3 2 1 measuring...
+  Y axis reads +9.5222 m/s^2 (sd 0.0165)
+  off-axis = 0.1817 m/s^2  (tilt 1.1 deg)
+  captured
+4
+
+--- Accel position: -Y up ---
+  position -- hold still: 3 2 1 measuring...
+  Y axis reads -9.9152 m/s^2 (sd 0.0153)
+  off-axis = 0.1692 m/s^2  (tilt 1.0 deg)
+  captured
+5
+
+--- Accel position: +Z up ---
+  position -- hold still: 3 2 1 measuring...
+  Z axis reads +9.8945 m/s^2 (sd 0.0357)
+  off-axis = 0.1630 m/s^2  (tilt 0.9 deg)
+  captured
+6
+
+--- Accel position: -Z up ---
+  position -- hold still: 3 2 1 measuring...
+  Z axis reads -9.7931 m/s^2 (sd 0.0172)
+  off-axis = 0.2659 m/s^2  (tilt 1.6 deg)
+  captured
+f
+
+--- Accel offset/scale fit ---
+
+  axis      +g        -g     offset    scale
+    X    +9.6269   -9.8115   -0.0923  0.99108
+    Y    +9.5222   -9.9152   -0.1965  0.99103
+    Z    +9.8945   -9.7931   +0.0507  1.00379
+
+  ; paste into platformio.ini build_flags
+    -D ACCEL_OFFSET_X=-0.092282
+    -D ACCEL_SCALE_X=0.991085
+    -D ACCEL_OFFSET_Y=-0.196510
+    -D ACCEL_SCALE_Y=0.991035
+    -D ACCEL_OFFSET_Z=0.050664
+    -D ACCEL_SCALE_Z=1.003787
+  ; apply as: a_corrected = (a_raw - offset) / scale
+s
+
+=== Calibration summary ===
+; paste into platformio.ini build_flags
+    -D GYRO_BIAS_X=0.002348
+    -D GYRO_BIAS_Y=-0.001140
+    -D GYRO_BIAS_Z=-0.000762
+
+--- Accel offset/scale fit ---
+
+  axis      +g        -g     offset    scale
+    X    +9.6269   -9.8115   -0.0923  0.99108
+    Y    +9.5222   -9.9152   -0.1965  0.99103
+    Z    +9.8945   -9.7931   +0.0507  1.00379
+
+  ; paste into platformio.ini build_flags
+    -D ACCEL_OFFSET_X=-0.092282
+    -D ACCEL_SCALE_X=0.991085
+    -D ACCEL_OFFSET_Y=-0.196510
+    -D ACCEL_SCALE_Y=0.991035
+    -D ACCEL_OFFSET_Z=0.050664
+    -D ACCEL_SCALE_Z=1.003787
+  ; apply as: a_corrected = (a_raw - offset) / scale
+
+NOTE: mounting misalignment is NOT covered here.  If the
+IMU sits a fraction of a degree off the body frame, that
+is a ROTATION, not an offset -- measure it at assembly and
+apply it after this correction.  Folding it into these
+offsets corrupts both.
