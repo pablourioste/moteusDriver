@@ -36,11 +36,21 @@
 //       nightmare.
 //
 // WIRING (H2):
-//   Teensy 30 (CAN3 TX) ---- TXD  |
-//   Teensy 31 (CAN3 RX) ---- RXD  | 3.3 V CAN-FD transceiver
-//   Teensy 3.3V         ---- VCC  |   (TCAN334, or MCP2562FD with
-//   Teensy GND          ---- GND  |    VIO on 3.3 V)
-//                                 +-- CANH / CANL ---- moteus
+//   Teensy 30 (CAN3 TX) ---- TXD   |
+//   Teensy 31 (CAN3 RX) ---- RXD   | 3.3 V CAN-FD transceiver
+//   Teensy 3.3V         ---- VCC   |   (this board: TCAN330G)
+//   Teensy GND          ---- GND   |
+//   PIN_CAN_SHDN        ---- SHDN  |
+//   PIN_CAN_SILENT      ---- S     |
+//                                  +-- CANH / CANL ---- moteus
+//
+// SHDN and S are NOT safe to leave unconnected or float-controlled by a
+// GPIO that never gets configured.  TCAN330G datasheet (TI SLLSEQ7F)
+// Table 6-2 gives both only a weak internal pull-down toward Normal mode,
+// and TI's own text says that bias "should not be relied upon by
+// design" -- especially once the pin is wired to another device's GPIO
+// instead of left genuinely floating.  setup() drives both LOW explicitly
+// before CAN3 is brought up.  See PIN_CAN_SHDN / PIN_CAN_SILENT below.
 //
 // PINS 30/31 ARE NOT NEGOTIABLE.  The Teensy 4.1 has three FlexCAN
 // modules but only CAN3 supports Flexible Data-rate, and moteus requires
@@ -51,6 +61,14 @@
 
 #include <Arduino.h>
 #include <FlexCAN_T4.h>
+
+// TCAN330G transceiver mode-control pins on the custom breakout.
+// PLACEHOLDERS -- 28 and 29 are guesses; verify against your board's
+// actual schematic before trusting them.  Wiring the wrong Teensy pin
+// here means these digitalWrite() calls silently do nothing to the
+// transceiver, and it stays in whatever mode it powered up in.
+constexpr uint8_t PIN_CAN_SHDN = 28;    // TODO(you): verify vs. schematic
+constexpr uint8_t PIN_CAN_SILENT = 29;  // TODO(you): verify vs. schematic
 
 namespace {
 
@@ -159,13 +177,44 @@ void setup() {
   Serial.println("  [ ] moteus on LOGIC POWER ONLY, wheel OFF");
   Serial.println();
 
+  // Wake the TCAN330G before CAN3 ever looks at RXD.  Per the datasheet's
+  // Driver/Receiver function tables (6-3, 6-5, 6-6): SHDN=HIGH (Shutdown)
+  // is what actually produces "frames=0, TX err=0, RX err=0" -- Shutdown
+  // turns the receiver off entirely and holds RXD at a constant recessive
+  // HIGH, so CAN3 just sees a dead-idle line with nothing to flag as an
+  // error.  S=HIGH (Silent) alone would NOT explain that symptom -- Silent
+  // only disables the driver, RXD stays live and frames would still print.
+  // Both are driven LOW regardless: LISTEN_ONLY below already guarantees
+  // CAN3 itself never transmits, so there is no reason to want Silent mode
+  // either.
+  Serial.println("Waking TCAN330G (SHDN, S -> LOW, normal mode)...");
+  pinMode(PIN_CAN_SHDN, OUTPUT);
+  pinMode(PIN_CAN_SILENT, OUTPUT);
+  digitalWrite(PIN_CAN_SHDN, LOW);
+  digitalWrite(PIN_CAN_SILENT, LOW);
+  delay(10);  // let the mode transition settle before CAN3 relies on RXD
+  Serial.println();
+
   can3.begin();
 
   // Exact rates via CANFD_timings_t rather than one of the FLEXCAN_FDRATES
   // presets: the presets stop at CAN_1M_8M and none of them is 1M/5M, so a
   // preset would put the data phase at the wrong rate.
+  //
+  // THE CLOCK IS NOT FREE TO CHOOSE.  The data-phase bit must divide into
+  // a whole number of time quanta, between 5 and 48 (FlexCAN_T4FDTimings
+  // .tpp:311).  24 MHz / 5 Mbit = 4.8 Tq -- no solution -- and 20 and 30
+  // MHz fail too (4 Tq is below the minimum; 30 MHz's 6 Tq cannot meet the
+  // 75% sample point with PSEG2 >= 2).  40 MHz gives 8 Tq at 75%, which is
+  // what the library's own CAN_1M_8M preset targets.
+  //
+  // This was a real failure, not a hypothetical: with CLK_24MHz the solver
+  // returns 0 BEFORE writing CBT/FDCBT or entering freeze mode, so the
+  // peripheral kept begin()'s CTRL1 -- LOM set, every segment field zero.
+  // That is not a legal bit timing, so CAN3 never synchronised: frames=0,
+  // counters=0, "NOT SYNCHRONISED" forever, on wiring that was fine.
   CANFD_timings_t timings;
-  timings.clock = CLK_24MHz;
+  timings.clock = CLK_40MHz;
   timings.baudrate = kArbitrationBaud;
   timings.baudrateFD = kDataBaud;
   timings.propdelay = 190;
@@ -177,10 +226,41 @@ void setup() {
   // error frames. The Teensy is physically incapable of commanding the
   // moteus while this firmware is running, which is what makes this step
   // safe to perform with the controller powered.
-  can3.setBaudRate(timings, LISTEN_ONLY);
+  //
+  // CHECK THE RETURN VALUE.  setBaudRate() reports an unsolvable timing by
+  // returning 0 and writing nothing -- no exception, no register touched.
+  // Dropping it means the banner below announces a rate the peripheral was
+  // never given, and every symptom afterwards points at the wiring.
+  if (!can3.setBaudRate(timings, LISTEN_ONLY)) {
+    while (true) {
+      Serial.println();
+      Serial.println("*** FATAL: setBaudRate() rejected these timings. ***");
+      Serial.println("CAN3 is NOT configured -- CBT/FDCBT were never written.");
+      Serial.println("Nothing below this line means anything.  This is a");
+      Serial.println("firmware fault, not a wiring fault: no clock/rate pair");
+      Serial.println("was solvable.  See the comment above timings.clock.");
+      delay(2000);
+    }
+  }
 
-  can3.setRegions(64);   // 64-byte mailboxes -- full FD payload
-  can3.enableFIFO();
+  // 64-byte mailboxes -- full FD payload.  setRegions() finishes by
+  // calling disableFIFO() itself, which is what ARMS the mailboxes: 0-6
+  // as RX_EMPTY, 7-13 as TX_INACTIVE (14 mailboxes at this region size).
+  // So this single call leaves the peripheral ready to receive.
+  //
+  // DO NOT ADD enableFIFO() HERE.  The 1062 has no FD FIFO -- NXP
+  // documented and advertised it, then confirmed it does not work -- and
+  // FlexCAN_T4FD's enableFIFO(true) is an EMPTY BLOCK
+  // (FlexCAN_T4FD.tpp:585).  What is not empty is the code above it: it
+  // zeroes every mailbox CS word, and code 0 is RX_INACTIVE.  So calling
+  // it disarms all 14 mailboxes and then does nothing else.
+  //
+  // The peripheral still synchronises, still sees every frame, and still
+  // reports zero errors -- it simply has nowhere to put anything, and
+  // readMB() only ever returns RX_FULL/RX_OVERRUN mailboxes.  Result:
+  // "Idle / Error Passive", frames=0, counters=0, on a perfect bus.
+  // Cost a full bench session; the wiring was fine the whole time.
+  can3.setRegions(64);
 
   Serial.printf("CAN3 up: %lu bps arbitration / %lu bps data, LISTEN ONLY\n",
                 (unsigned long)kArbitrationBaud, (unsigned long)kDataBaud);

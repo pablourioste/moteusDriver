@@ -282,6 +282,7 @@ void torqueStep(double torque_nm) {
 // the board still replies OK -- but no watchdog exists, and a dead host
 // leaves the motor spinning indefinitely.  It is invisible at the CAN
 // layer; the ONLY way to detect it is to stop talking and watch.
+
 void watchdogTest() {
   Serial.println();
   Serial.println("--- Watchdog test (N1) ---");

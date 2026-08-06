@@ -46,6 +46,43 @@ uint8_t roundUpDlc(uint8_t size) {
   return 64;
 }
 
+// Build an outgoing frame.  ALL THREE SEND SITES MUST GO THROUGH HERE --
+// they were open-coded once and drifted, with the consequences below.
+//
+// [1] THE EXTENDED-ID FLAG.  CANFD_message_t defaults flags.extended to
+//     false (FlexCAN_T4.h:80), and writeTxMailbox() then encodes the id as
+//     FLEXCAN_MB_ID_IDSTD(x) = (x & 0x7FF) << 18 -- an 11-bit mask.  A
+//     query id of 0x8001 becomes 0x001: destination 1 survives, and the
+//     0x8000 REPLY-REQUIRED BIT IS SILENTLY STRIPPED.
+//
+//     The board then receives a valid, correctly addressed command and
+//     acts on it, but never answers.  transact() times out and blames the
+//     bus.  In the torque build that asymmetry is the dangerous one: the
+//     driver concludes it has no link WHILE THE MOTOR IS EXECUTING THE
+//     COMMAND IT JUST SENT.
+//
+//     The >= 0x7ff threshold is copied from the vendor client rather than
+//     invented (moteus_transport.h:1250) so the two cannot disagree.
+//
+// [2] THE PADDING BYTE IS 0x50, NOT ZERO.  moteus pads short frames with
+//     Multiplex::kNop (moteus_transport.h:1256, moteus_multiplex.h:76),
+//     and its parser skips that byte explicitly.  0x00 is kWriteInt8 with
+//     a variable-length count, so zero padding decodes as a run of
+//     zero-length register writes -- benign in the reference parser, but
+//     it is a deviation from the vendor client for no reason at all.
+void buildFrame(CANFD_message_t* frame, uint32_t id, const uint8_t* payload,
+                uint8_t size) {
+  frame->id = id;
+  frame->flags.extended = (id >= 0x7ffu);   // see [1]
+  frame->brs = 1;     // bit rate switch -- the 5 Mbit data phase
+  frame->edl = 1;     // extended data length -- this is an FD frame
+  frame->len = roundUpDlc(size);
+
+  for (uint8_t i = 0; i < frame->len; i++) {
+    frame->buf[i] = (i < size) ? payload[i] : mm::Multiplex::kNop;  // see [2]
+  }
+}
+
 // Copy the fields the control code uses out of a moteus query reply.
 // Lifted verbatim from MoteusDriverWrapper.cpp:18-29 -- it is already
 // pure, and the host and the Teensy must agree about what a reply means.
@@ -109,17 +146,46 @@ bool TeensyMoteusDriver::initialize(std::string* error) {
   // preset: the presets stop at CAN_1M_8M and none is 1M/5M, so a preset
   // would put the data phase at the wrong rate.  Values match
   // can_listen, which is what S3 proved against the real bus.
+  //
+  // CLK_40MHz, not 24: the data-phase bit must divide into a whole number
+  // of time quanta between 5 and 48 (FlexCAN_T4FDTimings.tpp:311), and
+  // 24 MHz / 5 Mbit = 4.8 Tq has no solution.  20 and 30 MHz fail as well.
+  // 40 MHz gives 8 Tq at a 75% sample point.  See the longer note in
+  // firmware/drivers/can_listen/main.cpp -- CLK_24MHz cost a bench session
+  // that looked exactly like a broken transceiver.
   CANFD_timings_t timings;
-  timings.clock = CLK_24MHz;
+  timings.clock = CLK_40MHz;
   timings.baudrate = kArbitrationBaud;
   timings.baudrateFD = kDataBaud;
   timings.propdelay = 190;
   timings.bus_length = 1;
   timings.sample = 75;
 
-  can3.setBaudRate(timings);        // NOT listen-only: this one transmits
+  // NOT listen-only: this one transmits.  The return value is checked
+  // because setBaudRate() signals an unsolvable timing by returning 0 and
+  // writing no register at all -- CAN3 then runs on begin()'s CTRL1, which
+  // has every segment field zero and can never synchronise.  Diagnosed as
+  // a wiring problem for as long as it went unchecked.
+  if (!can3.setBaudRate(timings)) {
+    if (error != nullptr) {
+      *error =
+          "setBaudRate() rejected the CAN timings -- CAN3 is NOT configured. "
+          "This is a firmware fault, not wiring: no valid bit timing exists "
+          "for this clock/rate pair";
+    }
+    return false;
+  }
+
+  // setRegions() ends with disableFIFO(), which is what arms the
+  // mailboxes (0-6 RX, 7-13 TX at 64-byte regions).  Nothing else needed.
+  //
+  // NEVER call enableFIFO() here: the 1062 has no FD FIFO, so
+  // FlexCAN_T4FD's enableFIFO(true) body is empty -- but the code before
+  // the branch still zeroes every mailbox CS word to RX_INACTIVE.  It
+  // disarms the receiver and reports nothing.  Replies would simply never
+  // arrive, and query() would time out on a bus that is working.  See the
+  // long note in firmware/drivers/can_listen/main.cpp.
   can3.setRegions(64);
-  can3.enableFIFO();
 
   initialized_ = true;
 
@@ -148,14 +214,7 @@ bool TeensyMoteusDriver::initialize(std::string* error) {
 bool TeensyMoteusDriver::transact(const uint8_t* payload, uint8_t size,
                                   MotorState* out) {
   CANFD_message_t frame;
-  frame.id = makeArbitrationId(true);
-  frame.brs = 1;      // bit rate switch -- the 5 Mbit data phase
-  frame.edl = 1;      // extended data length -- this is an FD frame
-  frame.len = roundUpDlc(size);
-
-  for (uint8_t i = 0; i < frame.len; i++) {
-    frame.buf[i] = (i < size) ? payload[i] : 0;
-  }
+  buildFrame(&frame, makeArbitrationId(true), payload, size);
 
   const uint32_t start = micros();
   if (!can3.write(frame)) { return false; }
@@ -280,13 +339,7 @@ int TeensyMoteusDriver::diagnosticPoll(char* out, size_t out_size,
   mm::DiagnosticRead::Make(&writer, read_command, mm::DiagnosticRead::Format());
 
   CANFD_message_t frame;
-  frame.id = makeArbitrationId(true);
-  frame.brs = 1;
-  frame.edl = 1;
-  frame.len = roundUpDlc(data.size);
-  for (uint8_t i = 0; i < frame.len; i++) {
-    frame.buf[i] = (i < data.size) ? data.data[i] : 0;
-  }
+  buildFrame(&frame, makeArbitrationId(true), data.data, data.size);
 
   const uint32_t start = micros();
   if (!can3.write(frame)) { return -1; }
@@ -336,14 +389,10 @@ bool TeensyMoteusDriver::diagnosticCommand(const char* text, char* out,
     mm::DiagnosticWrite::Make(&writer, write_command,
                               mm::DiagnosticWrite::Format());
 
+    // No reply to the write itself, so the id is 0x0001 and this frame is
+    // correctly a standard one -- buildFrame() decides that from the id.
     CANFD_message_t frame;
-    frame.id = makeArbitrationId(false);   // no reply to the write itself
-    frame.brs = 1;
-    frame.edl = 1;
-    frame.len = roundUpDlc(data.size);
-    for (uint8_t i = 0; i < frame.len; i++) {
-      frame.buf[i] = (i < data.size) ? data.data[i] : 0;
-    }
+    buildFrame(&frame, makeArbitrationId(false), data.data, data.size);
     if (!can3.write(frame)) {
       if (error != nullptr) { *error = "CAN write failed"; }
       return false;
