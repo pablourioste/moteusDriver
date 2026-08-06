@@ -82,6 +82,17 @@ struct ControlOutput {
   // True if the clamp actually limited the command this cycle.  Persistent
   // saturation means the gains are too hot or the cube is past recovery.
   bool torque_clamped = false;
+
+  // True if the wheel-speed taper faded this cycle's torque (see
+  // Config::wheel_taper_start).  A duty cycle that stays high during normal
+  // recoveries means the taper is starting too early, not that the
+  // disturbance was large.
+  bool wheel_taper_active = false;
+
+  // True if update() was called with gain_scale < 1.0.  Exists because
+  // forgetting the gain scale is turned down is a classic half-hour of
+  // confusion during bench tuning.
+  bool gain_scaled = false;
 };
 
 class BalancingController {
@@ -155,7 +166,9 @@ class BalancingController {
     // TODO(you): set this from your measured current limit.
     double max_torque_nm = NAN;
 
-    // Wheel speed at which the cube is declared unrecoverable, rad/s.
+    // Wheel speed at which the cube is declared unrecoverable, rad/s.  The
+    // hard backstop -- see wheel_taper_start below for what keeps a
+    // legitimate recovery from reaching it in normal operation.
     //
     // WHAT IT DOES: latches off before the wheel reaches the motor's real
     // ceiling, leaving margin to decelerate.
@@ -167,6 +180,25 @@ class BalancingController {
     // TODO(you): set this.
     double max_wheel_omega = NAN;
 
+    // Wheel speed at which spin-up torque starts to fade, rad/s.  Must be
+    // less than max_wheel_omega.
+    //
+    // WHAT IT DOES: between this speed and max_wheel_omega, torque that
+    // would accelerate the wheel FURTHER in its current direction is
+    // smoothly scaled toward zero; torque that brakes it is never touched.
+    // Without this, a recovery that legitimately needs the wheel near its
+    // cap trips kWheelSaturated instead of being allowed to finish -- a
+    // panel-stage test of this control law saw the wheel reach 39.7 of a
+    // 40 rad/s cap on a normal envelope-edge recovery, which is exactly the
+    // case a hard trip alone punishes.
+    //
+    // HOW TO CHOOSE IT: below max_wheel_omega with enough margin that the
+    // hard trip stays a true backstop rather than the taper's usual
+    // operating point -- e.g. max_wheel_omega minus 10-15% of itself.
+    //
+    // TODO(you): set this once max_wheel_omega is set.
+    double wheel_taper_start = NAN;
+
     // Deadband on theta, radians.
     //
     // WHAT IT DOES: inside it no torque is commanded, so the wheel stops
@@ -174,11 +206,40 @@ class BalancingController {
     //
     // HOW TO CHOOSE IT: just above the peak-to-peak theta noise you observe
     // in imu_test with the rig held still.  0.002 rad is about 0.11 deg.
-    // Too large and the cube develops a visible limit cycle as it drifts
-    // across the dead zone.
     //
-    // TODO(you): measure the noise floor, then set this.
+    // WARNING -- a nonzero deadband does not just sit quietly: with k_theta
+    // zeroed out inside it, the remaining theta_dot/omega feedback has no
+    // equilibrium at theta = 0, so the state does not settle there -- it
+    // drifts across the dead zone, re-enters the k_theta region, gets pulled
+    // back, and overshoots into the deadband on the other side.  That is a
+    // limit cycle at roughly +/-theta_deadband, not a quiet zone, and it
+    // gets WORSE as theta_deadband grows.  Prefer 0.0 (no deadband) unless
+    // chatter is actually demonstrated on the rig; if it is, fix the noise
+    // in the estimator (tau, rate_cutoff_hz) rather than papering over it
+    // here.
+    //
+    // TODO(you): measure the noise floor.  Leave at 0.0 unless chatter is
+    // demonstrated.
     double theta_deadband = NAN;
+
+    // Consecutive invalid-estimate cycles allowed, once the estimator has
+    // produced at least one valid sample, before latching kSensorFault.
+    //
+    // WHAT IT DOES: closes a gap in the "state.valid == false" path, which
+    // is otherwise reported as kNotReady (not a trip, torque held at zero,
+    // stays armed) forever.  That is correct while the estimator is still
+    // warming up -- but if the IMU dies mid-flight, the same kNotReady
+    // report reads to an operator as "still warming up", not "the sensor is
+    // gone", and the rig coasts at zero torque and falls while looking
+    // idle rather than faulted.  Counting only starts after the estimator
+    // has been valid at least once, so ordinary startup is unaffected.
+    //
+    // HOW TO CHOOSE IT: a couple of loop periods' worth of grace for a
+    // single dropped read, not so many that a genuine sensor death goes
+    // unreported for long.  At 200 Hz, 10 cycles is 50 ms.
+    //
+    // TODO(you): set this.
+    int max_invalid_cycles = -1;
   };
 
   BalancingController();
@@ -195,7 +256,17 @@ class BalancingController {
   // Compute the torque for one cycle.  Runs the safety checks first: if any
   // trips, the output is zero torque and disarmed, and it stays that way
   // until reset().
-  ControlOutput update(const BodyState& state, const MotorState& motor);
+  //
+  // gain_scale multiplies the whole computed torque, uniformly softening
+  // the closed loop without moving its poles (scaling individual gains
+  // instead would).  It is a call-site argument rather than a Config field
+  // on purpose -- that keeps "this cycle is running softened" visible at
+  // every call site instead of hidden in a struct.  Pass e.g. 0.1 for a
+  // first closed-loop attempt, 1.0 once the gains are trusted.  Validate it
+  // to [0, 1] at its source (wherever it is set); this function trusts what
+  // it is given, same as it trusts the rest of Config.
+  ControlOutput update(const BodyState& state, const MotorState& motor,
+                       double gain_scale = 1.0);
 
   // Clear a latched safety trip and re-arm.  Only call this when a human has
   // confirmed the rig is back in a safe state.
@@ -212,6 +283,10 @@ class BalancingController {
   Config config_;
   bool armed_ = true;
   SafetyState safety_ = SafetyState::kOk;
+
+  // Mid-flight sensor loss tracking -- see Config::max_invalid_cycles.
+  bool ever_valid_ = false;
+  int invalid_count_ = 0;
 };
 
 }  // namespace cube

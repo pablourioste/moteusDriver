@@ -105,7 +105,13 @@ class StateEstimator {
     // is multiplied by k_theta_dot, so noise here becomes torque chatter.
     //
     // HOW TO CHOOSE IT: high enough to pass real cube motion (a few Hz),
-    // low enough to reject sensor noise.  10-20 Hz is a sane starting band.
+    // low enough to reject sensor noise.  10-20 Hz is a sane starting band,
+    // but check it is not eating the phase budget: a first-order low-pass at
+    // 10 Hz adds roughly 9 degrees of phase lag at a ~1.6 Hz closed-loop
+    // bandwidth, stacking on top of whatever the loop's own sample delay
+    // already costs.  At 50 Hz the same figure is about 1.8 degrees --
+    // effectively free.  Prefer >= 30 Hz unless the noise floor forces it
+    // lower.
     //
     // NOTE: this is a FREQUENCY, not a filter coefficient, precisely so it
     // keeps its meaning when the loop rate changes.  Derive the per-sample
@@ -113,6 +119,21 @@ class StateEstimator {
     //
     // TODO(you): set this.
     double rate_cutoff_hz = NAN;
+
+    // Expected loop interval, seconds -- i.e. 1 / control_rate_hz.
+    //
+    // WHAT IT DOES: bounds how far the MEASURED dt passed to update() is
+    // allowed to drift from the intended one before a cycle is treated as
+    // missed or duplicated rather than integrated.  See update() for the
+    // exact bound.
+    //
+    // HOW TO CHOOSE IT: the reciprocal of whatever rate the caller's loop
+    // actually runs at (cube_balancer's --rate, or the Teensy's fixed loop
+    // period).  Getting this wrong doesn't corrupt the filter -- it just
+    // makes the reject-bad-dt gate too loose or too tight.
+    //
+    // TODO(you): set this to 1.0 / <your control rate>.
+    double nominal_dt = NAN;
 
     // Samples to accumulate before the estimate is reported valid.
     //

@@ -66,6 +66,10 @@ void PrintUsage(const char* argv0) {
       << "  --k-theta-dot G     rate gain override\n"
       << "  --k-omega G         wheel speed gain override\n"
       << "  --theta-offset RAD  balance-point offset (from imu_test)\n"
+      << "  --gain-scale G      scale the whole control law, [0,1] "
+         "(default 1.0)\n"
+      << "                      use e.g. 0.1 for a first closed-loop "
+         "attempt\n"
       << "  --dry-run           run the loop but never command torque\n"
       << "  --help\n";
 }
@@ -92,6 +96,7 @@ int main(int argc, char** argv) {
 
   double rate_hz = 200.0;
   bool dry_run = false;
+  double gain_scale = 1.0;
 
   for (int i = 1; i < argc; i++) {
     const std::string arg = argv[i];
@@ -117,6 +122,8 @@ int main(int argc, char** argv) {
       control_config.k_omega = std::atof(argv[++i]);
     } else if (arg == "--theta-offset" && has_value) {
       estimator_config.theta_offset = std::atof(argv[++i]);
+    } else if (arg == "--gain-scale" && has_value) {
+      gain_scale = std::atof(argv[++i]);
     } else {
       std::cerr << "Unknown argument: " << arg << "\n";
       PrintUsage(argv[0]);
@@ -130,6 +137,21 @@ int main(int argc, char** argv) {
   }
   const double period = 1.0 / rate_hz;
   const long period_us = static_cast<long>(period * 1e6);
+
+  // The estimator's reject-bad-dt gate is relative to this, not a fixed
+  // constant, so it has to track whatever rate the loop actually runs at.
+  estimator_config.nominal_dt = period;
+
+  // BalancingController::update() trusts gain_scale as given -- validating
+  // it is this call site's job, since it is the source.  Written as
+  // !(x >= 0) rather than (x < 0) so a NaN from a malformed --gain-scale
+  // argument is also rejected: every comparison against NaN is false, so
+  // the naive form would let it straight through.
+  if (!(gain_scale >= 0.0) || !(gain_scale <= 1.0)) {
+    std::cerr << "Invalid --gain-scale " << gain_scale
+              << " (must be in [0, 1])\n";
+    return 1;
+  }
 
   // ---------------------------------------------------------------------
   // Refuse to run on unset configuration.
@@ -196,6 +218,9 @@ int main(int argc, char** argv) {
       << "Gains:       k_theta=" << control_config.k_theta
       << "  k_theta_dot=" << control_config.k_theta_dot
       << "  k_omega=" << control_config.k_omega << "\n"
+      << "Gain scale:  " << gain_scale
+      << (gain_scale < 1.0 ? "  (SOFTENED -- not the tuned response)\n"
+                            : "\n")
       << (dry_run ? "Mode:        DRY RUN (no torque commanded)\n" : "")
       << "\n";
 
@@ -266,7 +291,8 @@ int main(int argc, char** argv) {
     const cube::MotorState motor_state = motor.query();
 
     const cube::BodyState body = estimator.update(sample, motor_state, dt);
-    const cube::ControlOutput out = controller.update(body, motor_state);
+    const cube::ControlOutput out =
+        controller.update(body, motor_state, gain_scale);
 
     if (!dry_run && out.armed) {
       motor.sendTorque(out.torque_nm);
