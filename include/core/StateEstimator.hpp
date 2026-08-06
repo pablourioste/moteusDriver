@@ -55,24 +55,46 @@ class StateEstimator {
     // disturbance without lag and without jitter.
     double tau = NAN;
 
-    // Which gyro axis measures rotation about the balancing edge, and which
-    // two accelerometer axes span the plane the cube tilts in.
-    // 0 = x, 1 = y, 2 = z.
+    // Direction of the physical pivot/balance edge, as a UNIT VECTOR in the
+    // sensor's own frame -- not an axis index.
     //
-    // WHAT THEY DO: map the sensor's physical frame onto the one-dimensional
-    // tilt problem.  gyro_axis is the rate; accel_axis_a and _b are the
-    // atan2 numerator and denominator.
+    // WHY A VECTOR: an IMU bolted flush to a cube face has this equal to a
+    // raw sensor axis, e.g. (1,0,0) -- but a tilted mount, the IMU sitting
+    // at some angle on the panel, is the normal case, not the exception,
+    // and puts the true pivot direction somewhere between axes. No choice
+    // of "pick axis 0, 1 or 2" can represent that; a unit vector can, and
+    // it subsumes the axis-aligned case rather than replacing it.
     //
-    // HOW TO CHOOSE THEM: depends entirely on how the IMU is bolted to the
-    // cube.  For an IMU flat on a cube face with the cube tilting about the
-    // sensor X axis, gravity swings in the Y-Z plane: gyro_axis = 0,
-    // accel_axis_a = 1, accel_axis_b = 2.
+    // WHY IT IS ENOUGH: the pivot edge is horizontal and gravity is
+    // vertical, so gravity's component ALONG the pivot axis is exactly
+    // zero at every tilt angle, for ANY mounting -- it is a dot product of
+    // two always-perpendicular world vectors, which mounting cannot
+    // change. So the accelerometer's sensor-frame reading always lies in
+    // the plane perpendicular to this vector. accelAngle() derives an
+    // orthonormal basis for that plane internally (see StateEstimator.cpp)
+    // and reports the angle within it; the gyro rate about the pivot is
+    // the raw angular-rate vector dotted with this same direction.
     //
-    // TODO(you): set these, then confirm with imu_test that tilting the rig
-    // one way moves theta in one consistent direction.
-    int gyro_axis = -1;
-    int accel_axis_a = -1;
-    int accel_axis_b = -1;
+    // HOW TO CHOOSE IT: measure it on the assembled rig -- it cannot be
+    // read off a drawing to the precision this needs. Hold the rig at two
+    // (or three) different, known tilt poses and capture the averaged
+    // accelerometer reading at each; any two non-parallel readings span
+    // the plane, so their cross product gives this vector directly:
+    // pivot_axis = normalize(a_pose1 x a_pose2). This is exactly what
+    // firmware/imu/imu_axis_verify automates: capture at the equilibrium
+    // pose plus the left/right tilt limits, fit, print paste-ready flags.
+    //
+    // WORKED EXAMPLE (axis-aligned mount, for intuition only): an IMU flat
+    // on a face, tilting about the sensor's own X axis, has
+    // pivot_axis = (1, 0, 0) -- gravity then swings entirely in the
+    // sensor's Y-Z plane.
+    //
+    // TODO(you): measure this on the mounted rig with imu_axis_verify,
+    // then confirm with the same tool that tilting one way moves theta in
+    // one consistent direction before enabling the motor.
+    double pivot_axis_x = NAN;
+    double pivot_axis_y = NAN;
+    double pivot_axis_z = NAN;
 
     // Invert the tilt sign.
     //
@@ -202,10 +224,18 @@ class StateEstimator {
   const Config& config() const { return config_; }
 
  private:
-  // Pull one axis out of a sample by index, so the axis mapping above can be
-  // configuration rather than compiled-in field access.
-  static double accelAxis(const ImuData& imu, int axis);
-  static double gyroAxis(const ImuData& imu, int axis);
+  // Orthonormal basis derived from Config::pivot_axis_* : n is the
+  // (normalized) pivot direction; {u, v} span the plane perpendicular to
+  // it and are what accelAngle()'s atan2 is taken against. See
+  // StateEstimator.cpp for the derivation and why the specific choice of
+  // {u, v} within that plane does not matter -- theta_offset and
+  // invert_theta absorb it.
+  struct Basis {
+    double n[3];
+    double u[3];
+    double v[3];
+  };
+  Basis computeBasis() const;
 
   Config config_;
   BodyState state_;

@@ -189,7 +189,7 @@ int main(int argc, char** argv) {
             << "    * tilting one way gives a consistent sign\n"
             << "    * theta_dot has the SAME sign as theta while falling that "
                "way\n"
-            << "      (if not, fix gyro_axis or invert_theta -- a mismatch "
+            << "      (if not, fix pivot_axis or invert_theta -- a mismatch "
                "makes the\n"
             << "       controller amplify the fall instead of catching it)\n\n";
 
@@ -240,9 +240,11 @@ int main(int argc, char** argv) {
             estimator.accelAngle(sample) * kRadToDeg,
             state.valid ? "ok " : "...");
       } else {
-        // Raw gyro rate about each axis plus the accelerometer vector: the
-        // measurements you need to pick gyro_axis/accel_axis_* and to read
-        // theta_offset off a hand-balanced cube.
+        // Raw gyro rate about each axis plus the accelerometer vector: on
+        // the Teensy, firmware/imu/imu_axis_verify fits pivot_axis from
+        // these same kinds of readings (equilibrium/left/right poses)
+        // rather than picking a raw axis by eye. theta_offset still reads
+        // off a hand-balanced cube.
         std::printf(
             "\r  accel %+6.2f %+6.2f %+6.2f m/s^2   gyro %+7.3f %+7.3f "
             "%+7.3f rad/s   ",

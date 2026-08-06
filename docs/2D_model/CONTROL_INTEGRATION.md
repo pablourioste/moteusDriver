@@ -245,7 +245,7 @@ So the sentinels are caught up-front instead:
 | Field | Source | Note |
 |---|---|---|
 | `tau` | start ~0.5 s | crossover between gyro and accel |
-| `gyro_axis`, `accel_axis_a`, `accel_axis_b` | how the IMU is bolted on | `0`=x, `1`=y, `2`=z |
+| `pivot_axis_x`, `_y`, `_z` | how the IMU is bolted on | unit vector, fit with `imu_axis_verify` -- handles a tilted mount, not just axis 0/1/2 |
 | `invert_theta` | **verify on the rig** | §5.3 — the most dangerous value in the project |
 | `theta_offset` | measured with `imu_test` | balance by hand, read the angle |
 | `rate_cutoff_hz` | 10–20 Hz | a *frequency*, not a coefficient — §4.4 |
@@ -573,8 +573,8 @@ Each stage is checkable **before** the next exists. No stage below commands torq
 | Check | Pass criterion | If it fails |
 |---|---|---|
 | Returns a number | not `NAN` | the sentinel path is still live |
-| Level rig | reads ≈ `-theta_offset`, stable | axis pair `a`/`b` is wrong |
-| Tilt one way | moves **one consistent direction** | swap `accel_axis_a` / `accel_axis_b` |
+| Level rig | reads ≈ `-theta_offset`, stable | `pivot_axis` is wrong -- re-fit with `imu_axis_verify` |
+| Tilt one way | moves **one consistent direction** | re-fit `pivot_axis`, or toggle `invert_theta` |
 | Tilt ±45° | magnitude tracks roughly linearly | using `asin` instead of `atan2` |
 | Balance by hand | **record this number → `theta_offset`** | — |
 

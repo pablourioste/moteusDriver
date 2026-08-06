@@ -28,9 +28,9 @@ StateEstimator::StateEstimator(const Config& config) : config_(config) {}
 
 const char* StateEstimator::firstUnsetField() const {
   if (std::isnan(config_.tau)) { return "tau"; }
-  if (config_.gyro_axis < 0) { return "gyro_axis"; }
-  if (config_.accel_axis_a < 0) { return "accel_axis_a"; }
-  if (config_.accel_axis_b < 0) { return "accel_axis_b"; }
+  if (std::isnan(config_.pivot_axis_x)) { return "pivot_axis_x"; }
+  if (std::isnan(config_.pivot_axis_y)) { return "pivot_axis_y"; }
+  if (std::isnan(config_.pivot_axis_z)) { return "pivot_axis_z"; }
   if (std::isnan(config_.theta_offset)) { return "theta_offset"; }
   if (std::isnan(config_.rate_cutoff_hz)) { return "rate_cutoff_hz"; }
   if (std::isnan(config_.nominal_dt)) { return "nominal_dt"; }
@@ -43,25 +43,51 @@ bool StateEstimator::isConfigured() const {
   return firstUnsetField() == nullptr;
 }
 
-// --- Axis dispatch ---------------------------------------------------------
+// --- Axis geometry -----------------------------------------------------
 //
-// Trivial selection, no judgement involved -- it exists so the axis mapping
-// can be configuration rather than compiled-in field access.
+// Turns Config::pivot_axis_* into an orthonormal basis for the plane
+// gravity swings in. n is just the normalized pivot vector. {u, v} are
+// built with one Gram-Schmidt step off a reference axis -- Z by default,
+// switched to X only when n is close enough to Z that Z would make a
+// poorly-conditioned subtraction. The exact in-plane orientation this
+// produces is arbitrary but DETERMINISTIC: it only sets which raw numbers
+// accelAngle() computes from, not what the result means. theta_offset
+// absorbs the resulting phase and invert_theta absorbs the handedness,
+// exactly as they did when the mapping was three axis indices.
+//
+// u = v x n, this order and not n x v, is what lines the axis-aligned
+// worked example in the header up with the ORIGINAL pre-vector
+// convention: pivot_axis = (1,0,0) reduces to u=Y, v=Z, atan2(a_y, a_z) --
+// unchanged from when this was gyro_axis=0, accel_axis_a=1,
+// accel_axis_b=2.
+StateEstimator::Basis StateEstimator::computeBasis() const {
+  Basis b;
+  const double mag = std::sqrt(config_.pivot_axis_x * config_.pivot_axis_x +
+                               config_.pivot_axis_y * config_.pivot_axis_y +
+                               config_.pivot_axis_z * config_.pivot_axis_z);
+  b.n[0] = config_.pivot_axis_x / mag;
+  b.n[1] = config_.pivot_axis_y / mag;
+  b.n[2] = config_.pivot_axis_z / mag;
 
-double StateEstimator::accelAxis(const ImuData& imu, int axis) {
-  switch (axis) {
-    case 0: return imu.accel_x;
-    case 1: return imu.accel_y;
-    default: return imu.accel_z;
+  double r[3] = {0.0, 0.0, 1.0};
+  if (std::fabs(b.n[2]) > 0.9) {
+    r[0] = 1.0; r[1] = 0.0; r[2] = 0.0;
   }
-}
 
-double StateEstimator::gyroAxis(const ImuData& imu, int axis) {
-  switch (axis) {
-    case 0: return imu.gyro_x;
-    case 1: return imu.gyro_y;
-    default: return imu.gyro_z;
-  }
+  const double r_dot_n = r[0] * b.n[0] + r[1] * b.n[1] + r[2] * b.n[2];
+  const double v_raw[3] = {r[0] - r_dot_n * b.n[0], r[1] - r_dot_n * b.n[1],
+                           r[2] - r_dot_n * b.n[2]};
+  const double v_mag = std::sqrt(v_raw[0] * v_raw[0] + v_raw[1] * v_raw[1] +
+                                 v_raw[2] * v_raw[2]);
+  b.v[0] = v_raw[0] / v_mag;
+  b.v[1] = v_raw[1] / v_mag;
+  b.v[2] = v_raw[2] / v_mag;
+
+  b.u[0] = b.v[1] * b.n[2] - b.v[2] * b.n[1];
+  b.u[1] = b.v[2] * b.n[0] - b.v[0] * b.n[2];
+  b.u[2] = b.v[0] * b.n[1] - b.v[1] * b.n[0];
+
+  return b;
 }
 
 void StateEstimator::reset() {
@@ -82,9 +108,12 @@ double StateEstimator::accelAngle(const ImuData& imu) const {
   // conditioning as the argument approaches +/-1.  atan2 stays well
   // conditioned through the entire circle and needs no normalisation,
   // because the magnitude cancels in the ratio.
-  const double a = accelAxis(imu, config_.accel_axis_a);
-  const double b = accelAxis(imu, config_.accel_axis_b);
-  double angle = std::atan2(a, b) - config_.theta_offset;
+  const Basis basis = computeBasis();
+  const double proj_u = imu.accel_x * basis.u[0] + imu.accel_y * basis.u[1] +
+                        imu.accel_z * basis.u[2];
+  const double proj_v = imu.accel_x * basis.v[0] + imu.accel_y * basis.v[1] +
+                        imu.accel_z * basis.v[2];
+  double angle = std::atan2(proj_u, proj_v) - config_.theta_offset;
 
   // Offset subtracted BEFORE the inversion: theta_offset is measured in the
   // sensor's own raw sign convention (a reading taken at the balance point),
@@ -155,7 +184,9 @@ BodyState StateEstimator::update(const ImuData& imu, const MotorState& motor,
   // each other.  alpha is derived from the MEASURED dt every cycle, never
   // hardcoded: that is what keeps a late cycle from silently shifting the
   // crossover frequency.
-  double gyro_rate = gyroAxis(imu, config_.gyro_axis);
+  const Basis gyro_basis = computeBasis();
+  double gyro_rate = imu.gyro_x * gyro_basis.n[0] + imu.gyro_y * gyro_basis.n[1] +
+                     imu.gyro_z * gyro_basis.n[2];
   if (config_.invert_theta) {
     gyro_rate = -gyro_rate;
   }

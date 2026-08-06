@@ -350,14 +350,14 @@ cube::StateEstimator::Config makeEstimatorConfig() {
 #ifdef EST_TAU
   c.tau = EST_TAU;
 #endif
-#ifdef EST_GYRO_AXIS
-  c.gyro_axis = EST_GYRO_AXIS;
+#ifdef EST_PIVOT_AXIS_X
+  c.pivot_axis_x = EST_PIVOT_AXIS_X;
 #endif
-#ifdef EST_ACCEL_AXIS_A
-  c.accel_axis_a = EST_ACCEL_AXIS_A;
+#ifdef EST_PIVOT_AXIS_Y
+  c.pivot_axis_y = EST_PIVOT_AXIS_Y;
 #endif
-#ifdef EST_ACCEL_AXIS_B
-  c.accel_axis_b = EST_ACCEL_AXIS_B;
+#ifdef EST_PIVOT_AXIS_Z
+  c.pivot_axis_z = EST_PIVOT_AXIS_Z;
 #endif
 #ifdef EST_INVERT_THETA
   c.invert_theta = EST_INVERT_THETA;
@@ -419,9 +419,9 @@ void printFullConfig() {
   g_console.printf("  built  %s %s\r\n", __DATE__, __TIME__);
   g_console.printf("  rate   %.0f Hz  (period %.3f ms, watchdog %.1f ms)\r\n",
                kControlHz, kPeriod * 1000.0, kWatchdogS * 1000.0);
-  g_console.printf("  est    tau=%.4f  gyro_axis=%d  accel_axis=(%d,%d)  "
+  g_console.printf("  est    tau=%.4f  pivot_axis=(%.4f,%.4f,%.4f)  "
                "invert=%d  theta_offset=%.5f\r\n",
-               e.tau, e.gyro_axis, e.accel_axis_a, e.accel_axis_b,
+               e.tau, e.pivot_axis_x, e.pivot_axis_y, e.pivot_axis_z,
                e.invert_theta ? 1 : 0, e.theta_offset);
   g_console.printf("         rate_cutoff_hz=%.2f  nominal_dt=%.5f  "
                "warmup=%d  accel_gate=%.3f\r\n",

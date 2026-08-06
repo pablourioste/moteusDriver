@@ -26,6 +26,7 @@ it. Do not try to reimplement the inner loops here — you cannot beat 30 kHz ov
 | **Wire, test and calibrate the IMU** | [`docs/2D_model/IMU_SETUP.md`](docs/2D_model/IMU_SETUP.md) |
 | Understand the IMU design decisions | [`docs/2D_model/IMU_BLUEPRINT.md`](docs/2D_model/IMU_BLUEPRINT.md) |
 | Read a moteus calibration log | [`data/calibration/README.md`](data/calibration/README.md) |
+| **Run the rig end-to-end** (power, connections, S6 → N1 → N2) | [`docs/2D_model/BENCH_RUN_PROCEDURE.md`](docs/2D_model/BENCH_RUN_PROCEDURE.md) |
 
 ---
 
@@ -127,7 +128,7 @@ per-file reference in [`ARCHITECTURE.md`](docs/2D_model/ARCHITECTURE.md).
 
 Read this before energising anything.
 
-1. **Verify the tilt sign before enabling the motor.** A sign error in `gyro_axis` /
+1. **Verify the tilt sign before enabling the motor.** A sign error in `pivot_axis_*` /
    `invert_theta` makes the controller drive the cube over instead of catching it.
    This is the single most dangerous unset value.
 2. **`servo.max_current_A` can destroy hardware.** Use the *lower* of the motor's
@@ -174,6 +175,9 @@ usbipd attach --wsl --busid <BUSID>
 - **`imu_test` cannot verify a corrected axis mapping.** It default-constructs
   `StateEstimator`, so it only ever exercises the default configuration — yet checking
   a *corrected* mapping is precisely its purpose. It prints raw accel/gyro instead.
+  On the Teensy, `firmware/imu/imu_axis_verify` (`pio run -e imu_axis_verify`) closes
+  this gap: it drives the real `StateEstimator::accelAngle()`, fitting the pivot axis
+  from equilibrium/left/right poses captured live on the mounted rig.
 - **`kv` disagrees across calibration runs**: 368.1, 344.6, 373.6 (newest).
   `CMakeLists.txt` cites 344.6, understating the derived ceiling by ~8%.
 - **`MoteusConfig::motor_poles` and `encoder_cpr` are not cross-checked** against

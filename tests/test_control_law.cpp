@@ -98,13 +98,17 @@ cube::BalancingController::Config MakeControlConfig() {
 }
 
 // IMU flat on a cube face, tilting about sensor X: gravity swings in Y-Z.
-// This is the mapping StateEstimator.hpp uses as its worked example.
+// This is the mapping StateEstimator.hpp uses as its worked example --
+// pivot_axis = (1,0,0) is the vector form of the old gyro_axis=0,
+// accel_axis_a=1, accel_axis_b=2, and computeBasis() derives the same
+// u=Y, v=Z basis from it (see StateEstimator.cpp), so MakeImu() below is
+// unchanged from before the axis mapping became a vector.
 cube::StateEstimator::Config MakeEstimatorConfig() {
   cube::StateEstimator::Config c;
   c.tau = 0.5;
-  c.gyro_axis = 0;
-  c.accel_axis_a = 1;
-  c.accel_axis_b = 2;
+  c.pivot_axis_x = 1.0;
+  c.pivot_axis_y = 0.0;
+  c.pivot_axis_z = 0.0;
   c.invert_theta = false;
   c.theta_offset = 0.0;
   c.rate_cutoff_hz = 15.0;

@@ -74,30 +74,36 @@ That turns three of the `NaN` sentinels into real numbers.
 
 ---
 
-## 2. Determine the IMU axis mapping — from geometry
+## 2. Determine the IMU pivot axis — from geometry, if the mount allows it
 
-`StateEstimator::Config` has three axis fields, all unset (`-1`):
+`StateEstimator::Config` takes the pivot direction as a unit vector, all unset (`NAN`):
 
 ```cpp
-int gyro_axis    = -1;      // which gyro axis measures the tilt RATE
-int accel_axis_a = -1;      // the two accel axes gravity swings between
-int accel_axis_b = -1;
+double pivot_axis_x = NAN;  // physical balance edge, in the IMU's own frame
+double pivot_axis_y = NAN;
+double pivot_axis_z = NAN;
 bool invert_theta = false;  // sign convention
 ```
 
-You can work these out **from how the IMU is mounted**, before it ever powers on.
+The rule: the cube tips about one edge. That edge defines the rotation axis, and
+`pivot_axis` is that direction expressed in the sensor's own coordinates.
 
-The rule: the cube tips about one edge. That edge defines the rotation axis.
+**If the IMU is bolted flush to a cube face**, you can work this out from the drawing
+before it ever powers on: `pivot_axis` is just a raw sensor axis. Worked example from
+the header — if the cube tips about the sensor's X axis, gravity swings in the Y-Z
+plane, so `pivot_axis = (1, 0, 0)`.
 
-- **`gyro_axis`** = the sensor axis parallel to the pivot edge
-- **`accel_axis_a` / `_b`** = the other two — gravity swings in their plane
+**If the IMU sits at any angle on the panel — the normal case, not the exception —**
+no amount of reading the drawing will find it: no raw sensor axis is parallel to the
+edge, so there is nothing to read off. That has to be *measured* on the assembled rig
+with `firmware/imu/imu_axis_verify` (`pio run -e imu_axis_verify`), which fits
+`pivot_axis` from three static poses — equilibrium, left limit, right limit — rather
+than guessed from geometry. See its header comment, or
+[BENCH_RUN_PROCEDURE.md §1](BENCH_RUN_PROCEDURE.md#1-find-the-pivot-axis-and-sign-on-the-mounted-rig).
 
-Worked example from the header: if the cube tips about the sensor's X axis, gravity
-swings in the Y-Z plane, so `gyro_axis = 0`, `accel_axis_a = 1`, `accel_axis_b = 2`.
-
-**Write down which way the IMU is glued** — which chip axis points where relative to the
-cube. Step 4 of [IMU_SETUP.md](IMU_SETUP.md) then *confirms* it rather than discovering
-it, which is much faster.
+**Write down which way the IMU is glued** either way — which chip axis points roughly
+where relative to the cube. It's a useful sanity check against whatever
+`imu_axis_verify` fits, even when the precise vector has to come from measurement.
 
 > `invert_theta` still needs the real sensor — it depends on sign conventions you cannot
 > resolve on paper. Leave it for Step 4.
