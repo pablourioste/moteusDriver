@@ -28,11 +28,29 @@ Fill this in at the same time as the numbers, not afterwards.
 
 | | |
 |---|---|
-| Date measured | `____________` |
-| Measured by | `____________` |
-| Ambient temperature | `______` °C |
-| Rig configuration | `____________________________________` |
-| Scale used (and resolution) | `____________________________________` |
+| Date measured | 03/08/2026 (masses, mechanical team) |
+| Measured by | Mechanical team (masses); `cubli_panel_simscape_gates.m` (everything derived) |
+| Ambient temperature | not recorded |
+| Rig configuration | **Stage 1 planar panel** -- frame + encoder + wheel + motor, no base, WITH frame screws. This is the 1D/2D single-panel rig `firmware/full_case/cube_balancer` and this file's schema both target -- NOT the eventual 3D corner-balancing cube (`README.md` §5, unimplemented). |
+| Scale used (and resolution) | not recorded in the source doc |
+
+**Source, and why this isn't a bench measurement.** These values come from
+*Simscape Panel Model — Build Guide*: masses weighed directly, everything else
+(`l_total`, `I_pivot`, `I_w`) from a CAD-volume/back-solved-density model built
+in `cubli_panel_params.m` and validated against the physical rig by
+`cubli_panel_simscape_gates.m`'s six gates (hang test, swing period to
+<0.1%, analytic A/B match to 1.7e-7, pole match, energy conservation, momentum
+conservation) -- all passed. `I_w` extracted independently from swing periods
+came out 1.6% from the CAD value, which is the actual accuracy bound here, not
+the gates' individual tolerances.
+
+Filled in via `solve_gains.py`'s **direct geometry path** (`l_total` +
+`I_pivot`, added specifically to take numbers of this provenance without
+inventing a fake `l`/`l_w` split -- see the tool's own comments), not the
+default swing-test path (`l`, `l_w`, `T_swing`), because the Build Guide gives
+the ASSEMBLY's combined CoM distance (`ℓ = 101.7 mm`) directly and does not
+separately publish the body-only pivot-to-CoM distance or the pivot-to-wheel-
+axis distance that the swing-test path's `l`/`l_w` fields need.
 
 **Rig configuration** matters more than it looks. Record whether the wheel was
 mounted, whether the battery/tether was attached, and where the Teensy and the
@@ -173,13 +191,15 @@ the keys, and do not add a second copy of this block anywhere.
 
 ```measurements
 # name              value      unit    where it came from
-m_b                 nan        # kg    section 1, mean of 3
-m_w                 nan        # kg    section 1, mean of 3
-l                   nan        # m     section 2, knife edge
-l_w                 nan        # m     section 2, direct
-T_swing             nan        # s     section 3, mean period of 20 swings
-I_w                 nan        # kg m^2  section 4 -- OR set wheel_radius_m
-wheel_radius_m      nan        # m     section 4 -- OR set I_w, not both
+m_b                 0.1970     # kg    Simscape Build Guide, "Derived plant": m_panel
+m_w                 0.0661     # kg    Simscape Build Guide, "Derived plant": m_wheel
+l_total             0.1017     # m     Simscape Build Guide, "Derived plant": l (assembly CoM, wheel on)
+I_pivot             3.399e-3   # kg m^2  Simscape Build Guide: Theta, locked-wheel 2nd moment about pivot
+I_w                 1.858e-4   # kg m^2  Simscape Build Guide: I_w, wheel inertia about spin axis (CAD)
+l                   nan        # m     unused -- direct geometry path (l_total, I_pivot) used instead
+l_w                 nan        # m     unused -- direct geometry path (l_total, I_pivot) used instead
+T_swing             nan        # s     unused -- direct geometry path (l_total, I_pivot) used instead
+wheel_radius_m      nan        # m     unused -- I_w given directly
 ```
 
 ---
@@ -191,11 +211,13 @@ record what was pasted here so this file stays the whole story:
 
 | | |
 |---|---|
-| Gains pasted on | `____________` |
-| `k_theta` | `______` |
-| `k_theta_dot` | `______` |
-| `k_omega` | `______` |
-| Q, R used (if not the defaults) | `____________________` |
+| Gains pasted on | (this commit) |
+| `k_theta` | -1.12294 |
+| `k_theta_dot` | -0.123992 |
+| `k_omega` | -0.00173205 |
+| Q, R used (if not the defaults) | `--q 25 0.25 0.0025 --r 833.333333` -- Bryson's rule from `cubli_panel_simscape_gates.m` Gate 7: `theta_max=0.20 rad`, `rate_max=2.0 rad/s`, `omega_des=0.5*omega_cap=20 rad/s`, `rho=12`, `tau_cont=0.12`. NOT the script's own defaults (`100 1 0.01` / `1.0`) -- those were never used. |
+
+**Cross-check against the independently-run MATLAB solve** (same `cubli_panel_simscape_gates.m`, Gate 7): `K = [-1.0998, -0.1232, -0.001732]`. Agrees with the `solve_gains.py` run above to within ~2% on `k_theta`/`k_theta_dot` and to 5 significant figures on `k_omega` -- the residual is consistent with the Build Guide only printing 4-5 significant figures for its intermediate quantities (`ℓ`, `m_total`, `Θ̄`), not a disagreement in the underlying math. Both independently confirmed stable (see `solve_gains.py`'s own eigenvalue check above); the Build Guide's own stated closed-loop poles (`-9.72 ± 0.76j, -5.05`) could NOT be reproduced from its own stated A, B, K -- recomputing gives three real poles instead, which looks like a transcription slip in that one line of the guide, not a problem with K. Worth a second look on the MATLAB side, but does not change what to paste here.
 
 ### The sign — record what N1 showed
 

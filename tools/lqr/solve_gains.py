@@ -78,11 +78,42 @@ KNOWN_KEYS = {
     "T_swing",
     "I_w",
     "wheel_radius_m",
+    "l_total",
+    "I_pivot",
 }
 
-# Required for the solve.  I_w / wheel_radius_m are handled separately --
-# exactly one of the pair must be set.
-REQUIRED_KEYS = ["m_b", "m_w", "l", "l_w", "T_swing"]
+# Always required, regardless of which body-geometry path is used below --
+# m_total (= m_b + m_w) feeds the A matrix either way, and m_b/m_w are
+# reported in "=== measured ===" for the record even when l_total/I_pivot
+# bypass the swing-test arithmetic that would otherwise consume them.
+REQUIRED_KEYS = ["m_b", "m_w"]
+
+# Two ways to supply the body geometry -- exactly one of these sets, same
+# discipline as the I_w / wheel_radius_m either-or below:
+#
+#   SWING-TEST PATH (l, l_w, T_swing): the worksheet's default.  Measure a
+#   pendulum period on the actual rig; the swing-test formula turns it into
+#   l_total and I_pivot.
+#
+#   DIRECT PATH (l_total, I_pivot): for when l_total and I_pivot are
+#   already known from a validated model -- a Simscape/CAD linearisation
+#   that has passed its own gates, for instance -- rather than a bench
+#   measurement.  This is the same "CAD is sometimes the better source"
+#   reasoning section 4 already applies to I_w, extended to the body
+#   geometry.  Using this path means l and l_w individually are NOT
+#   needed: solve() only ever consumes their combination (l_total), never
+#   l/l_w separately, so asking for them here just to re-derive what is
+#   already known would add a fabrication step, not a check.
+#
+#   I_pivot means the same thing on both paths: the FULL second moment
+#   about the pivot with the wheel LOCKED to the body (rigidly attached,
+#   not spinning relative to it) -- what a swing test with the wheel
+#   locked actually measures, and what a CAD model's "locked wheel" inertia
+#   already is.  solve() subtracts I_w from it internally to get the
+#   Theta_bar the state-space model actually needs; do not subtract I_w
+#   before writing I_pivot in here, or it will be subtracted twice.
+SWING_TEST_KEYS = ["l", "l_w", "T_swing"]
+DIRECT_GEOMETRY_KEYS = ["l_total", "I_pivot"]
 
 
 def parse_measurements(path):
@@ -175,51 +206,109 @@ def resolve_wheel_inertia(values):
     )
 
 
-def body_inertia_from_swing(m_b, m_w, l, l_w, T):
-    """I_b about the pivot edge, from the swing test in section 3.
+def resolve_body_geometry(values):
+    """Either the swing-test path (l, l_w, T_swing) or the direct path
+    (l_total, I_pivot) -- exactly one, never both, never neither.  See the
+    DIRECT_GEOMETRY_KEYS comment above for when the direct path applies.
 
-    The cube is swung with the wheel MOUNTED (README.md section 3), so the
-    period reflects the whole assembly; the wheel's own contribution is
-    subtracted afterwards.  l_total is the CoM of the assembly, which is the
-    mass-weighted combination of the body's CoM and the wheel axis -- not l,
-    and using l here is the easy mistake.
+    Returns (l_total, I_pivot, source_description).  I_pivot here is the
+    RAW, full locked-wheel second moment -- I_w is NOT yet subtracted out.
+    That subtraction happens once, in solve(), so it applies identically to
+    both paths rather than being duplicated (and one copy silently drifting
+    from the other) in each.
     """
-    m_total = m_b + m_w
-    l_total = (m_b * l + m_w * l_w) / m_total
-    i_pivot = (m_total * G * l_total * T * T) / (4.0 * math.pi ** 2)
-    return i_pivot - m_w * l_w * l_w, l_total, i_pivot
+    have_swing = all(k in values and not math.isnan(values[k])
+                     for k in SWING_TEST_KEYS)
+    have_direct = all(k in values and not math.isnan(values[k])
+                      for k in DIRECT_GEOMETRY_KEYS)
+
+    if have_swing and have_direct:
+        sys.exit(
+            "Both the swing-test values (l, l_w, T_swing) and the direct "
+            "values (l_total, I_pivot) are set.  Set exactly one path.\n"
+            "Preferring one silently would hide a disagreement between a "
+            "bench measurement and a model -- and the two being allowed to "
+            "disagree is exactly the case worth surfacing, not hiding."
+        )
+    if have_direct:
+        return values["l_total"], values["I_pivot"], "given directly"
+    if have_swing:
+        m_b, m_w = values["m_b"], values["m_w"]
+        l, l_w, t = values["l"], values["l_w"], values["T_swing"]
+        m_total = m_b + m_w
+        # l_total is the CoM of the ASSEMBLY (wheel included) -- the
+        # mass-weighted combination of the body's CoM and the wheel axis.
+        # Not l on its own; using l here is the easy mistake, and it was
+        # this file's own mistake until this path was added.
+        l_total = (m_b * l + m_w * l_w) / m_total
+        i_pivot = (m_total * G * l_total * t * t) / (4.0 * math.pi ** 2)
+        return l_total, i_pivot, f"swing test, T = {t:.4g} s"
+    sys.exit(
+        "Body geometry is not set by either path -- see sections 2-3 of "
+        "measurements.md.\n"
+        "Set l, l_w and T_swing for the swing-test path, or l_total and "
+        "I_pivot directly if both are already known from a validated "
+        "model."
+    )
 
 
 def solve(values, q_diag, r_value):
     m_b = values["m_b"]
     m_w = values["m_w"]
-    l = values["l"]
-    l_w = values["l_w"]
-    T = values["T_swing"]
 
     i_w, i_w_source = resolve_wheel_inertia(values)
-    i_b, l_total, i_pivot = body_inertia_from_swing(m_b, m_w, l, l_w, T)
+    l_total, i_pivot, geometry_source = resolve_body_geometry(values)
 
     if not (i_w > 0.0):
         sys.exit(f"I_w came out {i_w:.6g}, which is not physical.")
-    if not (i_b > 0.0):
+    if not (i_pivot > 0.0):
         sys.exit(
-            f"I_b came out {i_b:.6g} kg m^2, which is not physical.\n"
-            "The swing test subtracts the wheel's contribution "
-            f"(m_w * l_w^2 = {m_w * l_w * l_w:.6g}) from the measured "
-            f"I_pivot = {i_pivot:.6g}.  A negative result means the measured "
-            "period is too short: check the amplitude was small (< ~10 deg) "
-            "and that T is the period, not the time for 20 swings."
+            f"I_pivot came out {i_pivot:.6g} kg m^2, which is not "
+            f"physical ({geometry_source}).\n"
+            "For the swing-test path: a negative result means the measured "
+            "period is too short -- check the amplitude was small "
+            "(< ~10 deg) and that T is the period, not the time for 20 "
+            "swings."
         )
 
     m_total = m_b + m_w
-    i_total = i_b + m_w * l_w ** 2
+    # I_total = I_pivot - I_w, NOT I_pivot.  Worked from the Lagrangian for
+    # a body with an internal reaction wheel (generalised coords theta,
+    # phi = wheel angle RELATIVE to the body): the wheel's own spin
+    # inertia I_w only enters the theta-equation through its coupling to
+    # phi-double-dot, not as a direct addition to theta's own inertia
+    # coefficient -- so the coefficient is Theta_bar = I_b + m_w*l_w^2,
+    # which is I_pivot (the FULL locked-wheel swing measurement, wheel
+    # rigidly attached to the body) with I_w subtracted back out.
+    #
+    # This is confirmed against the Simscape panel model
+    # (docs -- Simscape Panel Model, "Build Guide", Theta_bar row): its own
+    # stated Theta_bar = Theta - I_w to 4 decimal places, and reproducing
+    # its published K from Theta_bar (not Theta) matches to 4 significant
+    # figures; using raw Theta does not.
+    #
+    # Getting this backwards does not fail loudly -- it is a real, solvable
+    # LQR problem either way, just for the wrong plant, and the two only
+    # visibly disagree once the answer is compared against an independent
+    # source.  I_w/I_total is typically small (percent-level), so the
+    # resulting gain error is real but easy to mistake for measurement
+    # noise rather than a formula bug.
+    i_total = i_pivot - i_w
+    if not (i_total > 0.0):
+        sys.exit(
+            f"I_pivot - I_w came out {i_total:.6g}, which is not "
+            f"physical (I_pivot = {i_pivot:.6g}, I_w = {i_w:.6g}, "
+            f"{geometry_source}).\n"
+            "I_pivot is the FULL locked-wheel second moment about the "
+            "pivot (wheel rigidly attached, not spinning relative to the "
+            "body) -- it must be larger than I_w alone."
+        )
 
     # README.md section 4.  State x = [theta, theta_dot, omega_w], u = tau.
     # The positive (2,1) entry is the open-loop instability -- the cube falls.
     a = np.array([
         [0.0, 1.0, 0.0],
-        [m_total * G * l / i_total, 0.0, 0.0],
+        [m_total * G * l_total / i_total, 0.0, 0.0],
         [0.0, 0.0, 0.0],
     ])
     b = np.array([[0.0], [-1.0 / i_total], [1.0 / i_w + 1.0 / i_total]])
@@ -233,8 +322,8 @@ def solve(values, q_diag, r_value):
     derived = {
         "m_total": m_total,
         "l_total": l_total,
+        "geometry_source": geometry_source,
         "I_pivot": i_pivot,
-        "I_b": i_b,
         "I_w": i_w,
         "I_w_source": i_w_source,
         "I_total": i_total,
@@ -285,14 +374,19 @@ def main():
     print("=== measured ===")
     for key in REQUIRED_KEYS:
         print(f"  {key:<16} {values[key]:.6g}")
+    for key in SWING_TEST_KEYS + DIRECT_GEOMETRY_KEYS:
+        if key in values and not math.isnan(values[key]):
+            print(f"  {key:<16} {values[key]:.6g}")
     print()
     print("=== derived ===")
     print(f"  m_total          {d['m_total']:.6g} kg")
-    print(f"  l_total          {d['l_total']:.6g} m   (assembly CoM, wheel on)")
-    print(f"  I_pivot          {d['I_pivot']:.6g} kg m^2  (from the swing test)")
-    print(f"  I_b              {d['I_b']:.6g} kg m^2  (I_pivot - m_w*l_w^2)")
+    print(f"  l_total          {d['l_total']:.6g} m   (assembly CoM, wheel "
+          f"on -- {d['geometry_source']})")
+    print(f"  I_pivot          {d['I_pivot']:.6g} kg m^2  (assembly about "
+          f"the pivot, wheel locked -- {d['geometry_source']})")
     print(f"  I_w              {d['I_w']:.6g} kg m^2  ({d['I_w_source']})")
-    print(f"  I_total          {d['I_total']:.6g} kg m^2")
+    print(f"  I_total          {d['I_total']:.6g} kg m^2  (= I_pivot - I_w, "
+          f"the state-space model's actual denominator)")
     print(f"  K_t              {K_T:.6g} Nm/A  (kv = {MOTOR_KV})")
     print()
 
@@ -375,8 +469,8 @@ def main():
               file=sys.stderr)
         print("  Check the measurements first -- a sign or a decimal place in",
               file=sys.stderr)
-        print("  l, I_b or I_w is far more likely than an ill-posed problem.",
-              file=sys.stderr)
+        print("  l_total, I_pivot or I_w is far more likely than an "
+              "ill-posed problem.", file=sys.stderr)
         print("  Then try a larger --r, or a smaller --q.", file=sys.stderr)
         return 1
 
