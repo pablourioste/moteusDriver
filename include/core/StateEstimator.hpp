@@ -1,7 +1,10 @@
 // Fuses accelerometer and gyroscope into a tilt estimate.
 //
-// STATUS: SCAFFOLD.  The class shape and the derivation are here; the body of
-// update() is yours to write.  See src/core/StateEstimator.cpp.
+// STATUS: implemented.  update() and accelAngle() are in
+// src/core/StateEstimator.cpp, each step numbered against the derivation
+// below.  What is still outstanding is MEASUREMENT, not code: every
+// Config field below ships as a NaN/-1 sentinel and has to be measured on
+// the rig before anything will run.  See the per-field TODO(you) notes.
 //
 // WHY A COMPLEMENTARY FILTER
 //

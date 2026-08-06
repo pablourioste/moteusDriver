@@ -1,8 +1,9 @@
 // cube_balancer -- INTEGRATION.md S6, then N1/N2.  The real control loop.
 //
 // The Teensy port of apps/cube_balancer.cpp.  Same call sequence, same
-// safety ordering, same absolute-deadline scheduler; the CLI shell, the
-// signal handlers and the printf reporting are what fall away.
+// safety ordering, same absolute-deadline scheduler; the CLI shell and the
+// signal handlers are what fall away, replaced by single-char commands on a
+// second USB serial port and the application state machine below.
 //
 //   BMI270 --> StateEstimator --> BalancingController --> moteus
 //
@@ -81,8 +82,9 @@
 // firstUnsetField() before constructing anything that can move the motor
 // and halts naming the field.
 //
-// Fill them in via build_flags once docs/3d_scaling/README.md sections 3
-// and 4 have produced measurements and LQR gains.
+// Fill them in via build_flags: measure the rig into
+// docs/3d_scaling/measurements.md, run tools/lqr/solve_gains.py, and paste
+// its output into [env:cube_balancer].
 
 #include <Arduino.h>
 
@@ -108,7 +110,16 @@ namespace {
 // for no benefit.
 constexpr double kControlHz = 400.0;
 constexpr double kPeriod = 1.0 / kControlHz;
-constexpr uint32_t kPeriodUs = static_cast<uint32_t>(1e6 / kControlHz);
+
+// --- motor torque constant ----------------------------------------------
+//
+// K_t = 60 / (2*pi*kv), with kv = 373.6 from this motor's own calibration
+// (data/calibration/moteus-cal-AD4AN1QwUBYgOTNO-*.log, newest 2026-08-03).
+// Used at boot to turn the board's servo.max_current_A into the torque it
+// can actually produce -- see setup().  Re-derive it if the motor is ever
+// swapped or recalibrated; a stale value here makes the check below agree
+// with the wrong hardware.
+constexpr double kTorqueConstantNmPerA = 0.0256;
 
 // Board stops itself if it hears nothing for this long.  20 cycles is the
 // same margin the host driver uses: long enough to absorb jitter, short
@@ -177,6 +188,41 @@ constexpr double kGainScaleRungs[] = {0.0, 0.1, 0.3, 0.6, 1.0};
 constexpr int kGainScaleRungCount =
     sizeof(kGainScaleRungs) / sizeof(kGainScaleRungs[0]);
 constexpr int kGainScaleDefaultRung = 1;
+
+// --- two USB serial ports, and why ------------------------------------
+//
+// `Serial` carries BINARY TelemetryFrame records and nothing else.  All
+// text -- state transitions, '?', refusals -- and all operator input go to
+// `SerialUSB1`, the second CDC endpoint that -D USB_DUAL_SERIAL enables.
+//
+// They cannot share a port.  A frame is found by scanning for its 0xA5C3
+// magic, so any text injected into the stream is either skipped as garbage
+// (best case, and it still costs a resync) or contains those two bytes and
+// is decoded as the start of a frame (worst case, and it corrupts the
+// record after it).  telemetry_test states the same rule; this file is the
+// one that also has to READ commands, which makes it worse: you cannot run
+// tools/telemetry/capture.py on a port you are simultaneously typing 'a',
+// 'o' and '+' into.
+//
+// Practically: capture.py opens the FIRST port, `pio device monitor` the
+// SECOND.  On Windows they enumerate as two consecutive COM numbers.
+#if defined(USB_DUAL_SERIAL) || defined(USB_TRIPLE_SERIAL)
+#define CUBE_SECOND_SERIAL 1
+#else
+#define CUBE_SECOND_SERIAL 0
+#warning "cube_balancer built without USB_DUAL_SERIAL: console text will be \
+mixed into the binary telemetry stream and capture.py will see corruption. \
+Add -D USB_DUAL_SERIAL to this environment's build_flags."
+#endif
+
+#if CUBE_SECOND_SERIAL
+// Stream, not the concrete class: everything this file needs (print,
+// println, printf, available, read) is on Print/Stream, so the two ports
+// are interchangeable here and only setup() has to know which is which.
+Stream& g_console = SerialUSB1;
+#else
+Stream& g_console = Serial;
+#endif
 
 // --- telemetry --------------------------------------------------------
 constexpr uint32_t kTelemetryDecimation = 1;   // every cycle; raise if tight
@@ -274,7 +320,7 @@ bool g_running = false;
 // happened.
 void transitionTo(AppState next, const char* reason) {
   if (next == g_state) { return; }
-  Serial.printf("STATE: %s -> %s  (%s)\r\n", ToString(g_state), ToString(next),
+  g_console.printf("STATE: %s -> %s  (%s)\r\n", ToString(g_state), ToString(next),
                reason);
   if (next == AppState::kFault) { g_fault_reason = reason; }
   if (next != AppState::kArmed) { g_gate_pass_since = 0.0; }
@@ -287,9 +333,9 @@ void transitionTo(AppState next, const char* reason) {
 // that failed to answer on the bus.  Power-cycle after fixing it.
 void hangForever(const char* reason) {
   g_motor.stop();
-  Serial.println();
-  Serial.printf("HALTED (unrecoverable): %s\r\n", reason);
-  Serial.println("Fix the hardware/config and power-cycle to restart.");
+  g_console.println();
+  g_console.printf("HALTED (unrecoverable): %s\r\n", reason);
+  g_console.println("Fix the hardware/config and power-cycle to restart.");
   while (true) { delay(1000); }
 }
 
@@ -369,32 +415,32 @@ cube::BalancingController::Config makeControlConfig() {
 void printFullConfig() {
   const cube::StateEstimator::Config& e = g_estimator->config();
   const cube::BalancingController::Config& c = g_controller->config();
-  Serial.println("--- config -------------------------------------------");
-  Serial.printf("  built  %s %s\r\n", __DATE__, __TIME__);
-  Serial.printf("  rate   %.0f Hz  (period %.3f ms, watchdog %.1f ms)\r\n",
+  g_console.println("--- config -------------------------------------------");
+  g_console.printf("  built  %s %s\r\n", __DATE__, __TIME__);
+  g_console.printf("  rate   %.0f Hz  (period %.3f ms, watchdog %.1f ms)\r\n",
                kControlHz, kPeriod * 1000.0, kWatchdogS * 1000.0);
-  Serial.printf("  est    tau=%.4f  gyro_axis=%d  accel_axis=(%d,%d)  "
+  g_console.printf("  est    tau=%.4f  gyro_axis=%d  accel_axis=(%d,%d)  "
                "invert=%d  theta_offset=%.5f\r\n",
                e.tau, e.gyro_axis, e.accel_axis_a, e.accel_axis_b,
                e.invert_theta ? 1 : 0, e.theta_offset);
-  Serial.printf("         rate_cutoff_hz=%.2f  nominal_dt=%.5f  "
+  g_console.printf("         rate_cutoff_hz=%.2f  nominal_dt=%.5f  "
                "warmup=%d  accel_gate=%.3f\r\n",
                e.rate_cutoff_hz, e.nominal_dt, e.warmup_samples,
                e.accel_gate);
-  Serial.printf("  ctl    k_theta=%.5f  k_theta_dot=%.5f  k_omega=%.6f\r\n",
+  g_console.printf("  ctl    k_theta=%.5f  k_theta_dot=%.5f  k_omega=%.6f\r\n",
                c.k_theta, c.k_theta_dot, c.k_omega);
-  Serial.printf("         max_tilt=%.4f rad  max_torque=%.4f Nm  "
+  g_console.printf("         max_tilt=%.4f rad  max_torque=%.4f Nm  "
                "max_wheel_omega=%.2f  wheel_taper_start=%.2f\r\n",
                c.max_tilt_rad, c.max_torque_nm, c.max_wheel_omega,
                c.wheel_taper_start);
-  Serial.printf("         theta_deadband=%.5f  max_invalid_cycles=%d\r\n",
+  g_console.printf("         theta_deadband=%.5f  max_invalid_cycles=%d\r\n",
                c.theta_deadband, c.max_invalid_cycles);
-  Serial.println("-------------------------------------------------------");
+  g_console.println("-------------------------------------------------------");
 }
 
 void printStatus() {
   printFullConfig();
-  Serial.printf("  state       %s%s%s\r\n", ToString(g_state),
+  g_console.printf("  state       %s%s%s\r\n", ToString(g_state),
                g_state == AppState::kFault ? "  reason: " : "",
                g_state == AppState::kFault ? g_fault_reason : "");
 #if defined(ENABLE_BALANCER_TORQUE)
@@ -402,27 +448,27 @@ void printStatus() {
 #else
   const char* observe_note = "  (no-op: torque path not compiled in)";
 #endif
-  Serial.printf("  observe     %s%s\r\n", g_observe_mode ? "ON" : "OFF",
+  g_console.printf("  observe     %s%s\r\n", g_observe_mode ? "ON" : "OFF",
                observe_note);
-  Serial.printf("  gain_scale  %.2f  (rung %d/%d)\r\n", g_gain_scale,
+  g_console.printf("  gain_scale  %.2f  (rung %d/%d)\r\n", g_gain_scale,
                g_gain_scale_rung, kGainScaleRungCount - 1);
-  Serial.printf("  gyro bias   x=%+9.6f  y=%+9.6f  z=%+9.6f  rad/s  "
+  g_console.printf("  gyro bias   x=%+9.6f  y=%+9.6f  z=%+9.6f  rad/s  "
                "(%s)\r\n",
                g_imu.config().gyro_bias_x, g_imu.config().gyro_bias_y,
                g_imu.config().gyro_bias_z,
                g_bias_valid ? "valid" : "INVALID -- recalibrate");
-  Serial.printf("  theta_accel %.4f rad  (raw, last sample)\r\n",
+  g_console.printf("  theta_accel %.4f rad  (raw, last sample)\r\n",
                g_estimator->accelAngle(g_last_sample));
-  Serial.printf("  theta       %.4f rad  theta_dot %.4f rad/s  wheel_omega "
+  g_console.printf("  theta       %.4f rad  theta_dot %.4f rad/s  wheel_omega "
                "%.2f rad/s  (filtered, last cycle)\r\n",
                g_last_body.theta, g_last_body.theta_dot,
                g_last_body.wheel_omega);
-  Serial.printf("  motor       valid=%d  mode=%d  fault=%d  bus=%.2f V  "
+  g_console.printf("  motor       valid=%d  mode=%d  fault=%d  bus=%.2f V  "
                "temp=%.1f C\r\n",
                g_last_motor.valid ? 1 : 0, g_last_motor.mode,
                g_last_motor.fault, g_last_motor.bus_voltage,
                g_last_motor.motor_temperature_c);
-  Serial.printf("  cycles      %lu  late %lu (%.2f%%)  worst overrun "
+  g_console.printf("  cycles      %lu  late %lu (%.2f%%)  worst overrun "
                "%.2f ms  dropped-telemetry %lu\r\n",
                (unsigned long)g_cycles, (unsigned long)g_late_cycles,
                g_cycles ? 100.0 * g_late_cycles / g_cycles : 0.0,
@@ -436,7 +482,7 @@ void stepGainScale(int delta) {
     g_gain_scale_rung = kGainScaleRungCount - 1;
   }
   g_gain_scale = kGainScaleRungs[g_gain_scale_rung];
-  Serial.printf("gain_scale -> %.2f (rung %d/%d)\r\n", g_gain_scale,
+  g_console.printf("gain_scale -> %.2f (rung %d/%d)\r\n", g_gain_scale,
                g_gain_scale_rung, kGainScaleRungCount - 1);
 }
 
@@ -448,14 +494,14 @@ void stepGainScale(int delta) {
 // starts.
 bool runCalibration() {
   g_bias_valid = false;
-  Serial.print("gyro bias -- HOLD STILL... ");
+  g_console.print("gyro bias -- HOLD STILL... ");
   std::string error;
   if (!g_imu.calibrateGyroBias(2.0, &error)) {
-    Serial.println("FAIL");
-    Serial.println(error.c_str());
+    g_console.println("FAIL");
+    g_console.println(error.c_str());
     return false;
   }
-  Serial.println("OK");
+  g_console.println("OK");
   g_bias_valid = true;
   return true;
 }
@@ -464,10 +510,10 @@ void handleCommand(char c) {
   switch (c) {
     case 'a':
       if (g_state != AppState::kIdle) {
-        Serial.printf("ARM ignored: not IDLE (currently %s)\r\n",
+        g_console.printf("ARM ignored: not IDLE (currently %s)\r\n",
                      ToString(g_state));
       } else if (!g_bias_valid) {
-        Serial.println(
+        g_console.println(
             "ARM refused: gyro bias not valid -- recalibrate first ('c').");
       } else {
         transitionTo(AppState::kArmed, "operator ARM");
@@ -478,7 +524,7 @@ void handleCommand(char c) {
       if (g_state == AppState::kArmed || g_state == AppState::kBalance) {
         transitionTo(AppState::kIdle, "operator DISARM");
       } else {
-        Serial.printf("DISARM ignored: not ARMED/BALANCE (currently %s)\r\n",
+        g_console.printf("DISARM ignored: not ARMED/BALANCE (currently %s)\r\n",
                      ToString(g_state));
       }
       break;
@@ -490,9 +536,9 @@ void handleCommand(char c) {
 
     case 'r':
       if (g_state != AppState::kFault) {
-        Serial.println("RESET ignored: not in FAULT.");
+        g_console.println("RESET ignored: not in FAULT.");
       } else if (digitalRead(kEstopPin) == HIGH) {
-        Serial.println(
+        g_console.println(
             "RESET refused: physical e-stop still open -- close it first.");
       } else {
         // The only call to these two reset()s in this file, and the only
@@ -513,7 +559,7 @@ void handleCommand(char c) {
 
     case 'c':
       if (g_state != AppState::kIdle) {
-        Serial.printf("RECALIBRATE ignored: only from IDLE (currently %s)\r\n",
+        g_console.printf("RECALIBRATE ignored: only from IDLE (currently %s)\r\n",
                      ToString(g_state));
       } else {
         transitionTo(AppState::kCalib, "operator recalibrate");
@@ -529,11 +575,11 @@ void handleCommand(char c) {
     case 'o':
 #if defined(ENABLE_BALANCER_TORQUE)
       g_observe_mode = !g_observe_mode;
-      Serial.printf("observe mode: %s\r\n",
+      g_console.printf("observe mode: %s\r\n",
                    g_observe_mode ? "ON (torque hard-zeroed)"
                                   : "OFF -- TORQUE LIVE IN BALANCE");
 #else
-      Serial.println(
+      g_console.println(
           "observe mode toggle ignored: torque path not compiled in "
           "(build with -D ENABLE_BALANCER_TORQUE for N1/N2).");
 #endif
@@ -557,8 +603,8 @@ void handleCommand(char c) {
 }
 
 void pollCommands() {
-  while (Serial.available() > 0) {
-    handleCommand(static_cast<char>(Serial.read()));
+  while (g_console.available() > 0) {
+    handleCommand(static_cast<char>(g_console.read()));
   }
 }
 
@@ -653,20 +699,31 @@ void recordTelemetry(const cube::ImuData& imu, const cube::MotorState& motor,
 }  // namespace
 
 void setup() {
+  // Baud is ignored on USB CDC -- both ports run at full USB speed
+  // regardless of what is passed here.  begin() is still required to
+  // enumerate them.
   Serial.begin(115200);
+#if CUBE_SECOND_SERIAL
+  SerialUSB1.begin(115200);
+#endif
+  // Bounded wait for USB enumeration, so the banner and any refusal
+  // message are not printed into a port nobody has opened yet.  Both CDC
+  // interfaces belong to one composite device and come up together, so
+  // waiting on `Serial` covers the console too.  Bounded, so a rig running
+  // headless still boots.
   while (!Serial && millis() < 3000) {}
 
-  Serial.println();
+  g_console.println();
 #if defined(ENABLE_BALANCER_TORQUE)
-  Serial.println("*********************************************************");
-  Serial.println("***  BALANCER -- TORQUE-CAPABLE BUILD.                 ***");
-  Serial.println("***  Boots in OBSERVE MODE regardless -- 'o' to arm    ***");
-  Serial.println("***  real torque.  WHEEL OFF for N1.                   ***");
-  Serial.println("*********************************************************");
+  g_console.println("*********************************************************");
+  g_console.println("***  BALANCER -- TORQUE-CAPABLE BUILD.                 ***");
+  g_console.println("***  Boots in OBSERVE MODE regardless -- 'o' to arm    ***");
+  g_console.println("***  real torque.  WHEEL OFF for N1.                   ***");
+  g_console.println("*********************************************************");
 #else
-  Serial.println("=== cube_balancer -- S6, torque path not compiled in ===");
+  g_console.println("=== cube_balancer -- S6, torque path not compiled in ===");
 #endif
-  Serial.println();
+  g_console.println();
 
   // --- the NaN gate, before anything can move ---------------------------
   //
@@ -680,25 +737,25 @@ void setup() {
     const char* unset_gain = probe_controller.firstUnsetField();
 
     if (unset_filter != nullptr || unset_gain != nullptr) {
-      Serial.println("REFUSING TO RUN: the control configuration is incomplete.");
-      Serial.println();
+      g_console.println("REFUSING TO RUN: the control configuration is incomplete.");
+      g_console.println();
       if (unset_filter != nullptr) {
-        Serial.printf("  StateEstimator::Config::%s is unset\r\n", unset_filter);
+        g_console.printf("  StateEstimator::Config::%s is unset\r\n", unset_filter);
       }
       if (unset_gain != nullptr) {
-        Serial.printf("  BalancingController::Config::%s is unset\r\n",
+        g_console.printf("  BalancingController::Config::%s is unset\r\n",
                       unset_gain);
       }
-      Serial.println();
-      Serial.println("These are deliberately NaN -- they cannot be guessed");
-      Serial.println("without measuring the rig.  See:");
-      Serial.println("  docs/3d_scaling/README.md s3   inertia, mass, CoM");
-      Serial.println("  docs/3d_scaling/README.md s4   the LQR gains");
-      Serial.println();
-      Serial.println("Set them as build_flags in platformio.ini.");
-      Serial.println();
-      Serial.println("(Reaching this message is the EXPECTED S6 result while");
-      Serial.println(" the gains are unmeasured -- it proves the gate works.)");
+      g_console.println();
+      g_console.println("These are deliberately NaN -- they cannot be guessed");
+      g_console.println("without measuring the rig.  See:");
+      g_console.println("  docs/3d_scaling/README.md s3   inertia, mass, CoM");
+      g_console.println("  docs/3d_scaling/README.md s4   the LQR gains");
+      g_console.println();
+      g_console.println("Set them as build_flags in platformio.ini.");
+      g_console.println();
+      g_console.println("(Reaching this message is the EXPECTED S6 result while");
+      g_console.println(" the gains are unmeasured -- it proves the gate works.)");
       hangForever("configuration incomplete");
     }
   }
@@ -709,8 +766,8 @@ void setup() {
   // defaulting to "safe to move".
   pinMode(kEstopPin, INPUT_PULLUP);
   if (digitalRead(kEstopPin) == HIGH) {
-    Serial.println("E-STOP is OPEN (or unwired) -- close it to run.");
-    Serial.printf("Wire a normally-closed button: pin %d <-> GND\r\n",
+    g_console.println("E-STOP is OPEN (or unwired) -- close it to run.");
+    g_console.printf("Wire a normally-closed button: pin %d <-> GND\r\n",
                   kEstopPin);
     while (digitalRead(kEstopPin) == HIGH) { delay(200); }
   }
@@ -718,24 +775,93 @@ void setup() {
   // --- devices ---------------------------------------------------------
   std::string error;
 
-  Serial.print("IMU... ");
+  g_console.print("IMU... ");
   if (!g_imu.initialize(&error)) {
-    Serial.println("FAIL");
-    Serial.println(error.c_str());
+    g_console.println("FAIL");
+    g_console.println(error.c_str());
     hangForever("IMU initialize() failed");
   }
-  Serial.println("OK");
+  g_console.println("OK");
 
-  Serial.print("motor... ");
+  g_console.print("motor... ");
   cube::TeensyMoteusDriver::Config motor_config;
   motor_config.watchdog_timeout_s = kWatchdogS;
+
+  // Two torque clamps sit in series -- BalancingController's and this
+  // driver's -- and the effective ceiling is the lower of them.  The
+  // control law's is the one that is supposed to bind: it is the number
+  // the LQR solve assumed, and the number the operator tuned.  The
+  // driver's is a backstop.  So raise the driver's whenever the law's is
+  // higher, exactly as apps/cube_balancer.cpp does; leaving it at its 0.5
+  // default means a law clamped to, say, 0.6 Nm silently never reaches its
+  // own limit and every torque trace is clipped for reasons nothing
+  // reports.
+  const double law_max_torque_nm = makeControlConfig().max_torque_nm;
+  if (law_max_torque_nm > motor_config.max_torque_nm) {
+    motor_config.max_torque_nm = law_max_torque_nm;
+  }
+
   g_motor = cube::TeensyMoteusDriver(motor_config);
   if (!g_motor.initialize(&error)) {
-    Serial.println("FAIL");
-    Serial.println(error.c_str());
+    g_console.println("FAIL");
+    g_console.println(error.c_str());
     hangForever("motor initialize() failed");
   }
-  Serial.println("OK");
+  g_console.println("OK");
+
+  // --- what the board can ACTUALLY deliver -------------------------------
+  //
+  // Both clamps above are software believing things about the hardware.
+  // The hardware's own limit is servo.max_current_A, which lives in the
+  // board's flash and is provisioned from the host (S5) -- nothing in this
+  // firmware sets it, so nothing in this firmware knows it without asking.
+  //
+  // Asking matters because the two failure directions look nothing alike.
+  // Too HIGH is rig-destroying: exceeding the motor's or the board's rating
+  // damages hardware.  Too LOW is quiet: the control law saturates below
+  // the authority its gains were computed for, the cube fails to catch
+  // itself, and every trace looks like the gains are wrong rather than like
+  // the current limit is.  A power cycle after a session that pushed a
+  // volatile config produces exactly the second case.
+  //
+  // So read it back and refuse on a mismatch -- the same refuse-to-run
+  // discipline firstUnsetField() applies to the gains, extended across the
+  // CAN link to the board's own settings.  Startup-only: the exchange takes
+  // several round trips.  See TeensyMoteusDriver::readConfigDouble().
+  {
+    double max_current_a = 0.0;
+    g_console.print("servo.max_current_A... ");
+    if (!g_motor.readConfigDouble("servo.max_current_A", &max_current_a, &error)) {
+      g_console.println("FAIL");
+      g_console.println(error.c_str());
+      hangForever("could not read servo.max_current_A back from the board");
+    }
+
+    const double board_ceiling_nm = kTorqueConstantNmPerA * max_current_a;
+    g_console.printf("%.2f A  ->  %.3f Nm at K_t = %.4f Nm/A\r\n",
+                     max_current_a, board_ceiling_nm, kTorqueConstantNmPerA);
+
+    if (!(max_current_a > 0.0)) {
+      // Also catches a NaN read, which would make every comparison below
+      // false and wave the check through.
+      hangForever("servo.max_current_A is zero, negative or unreadable");
+    }
+    if (law_max_torque_nm > board_ceiling_nm) {
+      g_console.printf(
+          "  CTL_MAX_TORQUE_NM = %.3f Nm, but %.2f A can only deliver "
+          "%.3f Nm.\r\n",
+          law_max_torque_nm, max_current_a, board_ceiling_nm);
+      g_console.println(
+          "  The control law would saturate before reaching its own limit,");
+      g_console.println(
+          "  so the LQR gains were solved for authority the rig does not");
+      g_console.println("  have.  Lower CTL_MAX_TORQUE_NM, or raise");
+      g_console.println(
+          "  SERVO_MAX_CURRENT_A -- but only within the LOWER of the motor's");
+      g_console.println("  and the board's rating.");
+      hangForever("max_torque_nm exceeds what servo.max_current_A can deliver");
+    }
+  }
 
   static cube::StateEstimator estimator(makeEstimatorConfig());
   static cube::BalancingController controller(makeControlConfig());
@@ -749,7 +875,7 @@ void setup() {
   // rig during the 3 s window is normal, not a hardware fault.
   transitionTo(AppState::kCalib, "init succeeded");
   while (!runCalibration()) {
-    Serial.println("retrying in 1s -- hold the rig still...");
+    g_console.println("retrying in 1s -- hold the rig still...");
     delay(1000);
   }
 
@@ -762,9 +888,9 @@ void setup() {
 #endif
 
   printFullConfig();
-  Serial.printf("rate %.0f Hz, watchdog %.0f ms\r\n", kControlHz,
+  g_console.printf("rate %.0f Hz, watchdog %.0f ms\r\n", kControlHz,
                 kWatchdogS * 1000.0);
-  Serial.println(
+  g_console.println(
       "Commands: a=arm d=disarm SPACE=estop r=reset c=recal o=observe "
       "+/-=gain ?=status");
 
@@ -838,7 +964,7 @@ void loop() {
     // The numbers at the moment of the trip -- '?' after the fact only
     // shows the CURRENT (post-trip, likely settling) state, and this is
     // what actually tripped it.
-    Serial.printf(
+    g_console.printf(
         "  theta %.3f rad   theta_dot %.3f rad/s   wheel %.1f rad/s   "
         "motor fault %d\r\n",
         body.theta, body.theta_dot, body.wheel_omega, motor_state.fault);
@@ -876,10 +1002,15 @@ void loop() {
   next_deadline += kPeriod;
   const double slack = next_deadline - g_clock.seconds();
 
-  if ((g_seq % kTelemetryDecimation) == 0) {
+  // Decimate on the CYCLE count, not on frame.seq.  seq has to stay a
+  // gapless count of frames EMITTED, because that is what the host uses to
+  // detect loss: tools/telemetry/decode.py reads a jump in seq as dropped
+  // frames.  Driving the decimation from seq itself would make every
+  // skipped cycle look like a dropped frame the moment kTelemetryDecimation
+  // is raised above 1 -- a debugging trail that leads nowhere, since
+  // nothing was actually lost.
+  if ((g_cycles % kTelemetryDecimation) == 0) {
     recordTelemetry(sample, motor_state, body, out, dt, slack, !authority);
-  } else {
-    g_seq++;
   }
 
   if (slack > 0.0) {
@@ -899,6 +1030,4 @@ void loop() {
     // back-to-back cycles; resynchronise instead.
     if (-slack > kPeriod) { next_deadline = g_clock.seconds() + kPeriod; }
   }
-
-  (void)kPeriodUs;
 }

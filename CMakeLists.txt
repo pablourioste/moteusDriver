@@ -455,6 +455,20 @@ target_compile_options(test_telemetry_ring PRIVATE -Wall -Wextra)
 target_link_libraries(test_telemetry_ring PRIVATE cube_core)
 add_test(NAME test_telemetry_ring COMMAND test_telemetry_ring)
 
+# The control law, on the desk.  StateEstimator and BalancingController are
+# pure functions of their inputs -- they take an ImuData and a MotorState and
+# return a BodyState / ControlOutput, touching no bus and no clock -- so the
+# whole safety envelope is verifiable before the rig is ever powered.
+#
+# This covers the machinery AROUND the gains (the sentinel gate, the trip
+# ordering and precedence, the latch, the clamps, the dt gate) and not the
+# gains themselves, which need the rig.  That split is deliberate: the
+# machinery has to be right regardless of what the gains turn out to be.
+add_executable(test_control_law tests/test_control_law.cpp)
+target_compile_options(test_control_law PRIVATE -Wall -Wextra)
+target_link_libraries(test_control_law PRIVATE cube_core)
+add_test(NAME test_control_law COMMAND test_control_law)
+
 find_package(Boost QUIET COMPONENTS unit_test_framework)
 if(Boost_FOUND AND TARGET Boost::unit_test_framework)
   set(MOTEUS_TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/moteus/lib/cpp/mjbots/moteus/test)

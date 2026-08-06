@@ -203,22 +203,56 @@ print("k_theta_dot =", K[0,1])
 print("k_omega     =", K[0,2])
 ```
 
-Feed the result in without rebuilding:
+**Do not paste this snippet into a REPL — run the script.**
+`tools/lqr/solve_gains.py` is this solve, wired to
+[measurements.md](measurements.md) so the numbers live in exactly one place,
+with the sanity checks below as assertions rather than prose:
 
 ```bash
-./build/cube_balancer --k-theta 3.2 --k-theta-dot 0.31 --k-omega 0.0021
+./moteus-venv/bin/python tools/lqr/solve_gains.py
 ```
 
-Once they are settled, promote them to the `kDefault*Gain` constants in
-`include/core/BalancingController.hpp`.
+It prints paste-ready `-D CTL_K_*` flags for `[env:cube_balancer]` in
+`platformio.ini`. It refuses while any measurement is still `nan`, naming the
+first, and refuses to print flags at all if the closed loop it just solved is
+unstable.
+
+To try gains on the **host reference** target without rebuilding the firmware:
+
+```bash
+./build/cube_balancer --k-theta <k> --k-theta-dot <k> --k-omega <k>
+```
+
+The rig itself is the Teensy, and its gains come from build flags — there is no
+`kDefault*Gain` constant to promote them to, deliberately. The `Config` fields
+stay NaN sentinels so an unset gain refuses to run instead of silently
+disabling the safety envelope.
 
 ### Sanity checks on the result
 
-- `k_theta` should be **positive** and comfortably larger than `k_theta_dot`.
-- `k_omega` should be **small** — a thousandth or so of `k_theta`. Too large
-  and the cube visibly leans away from vertical to bleed wheel speed.
-- Verify the closed loop is stable before running: `np.linalg.eigvals(A - B@K)`
-  must all have negative real parts.
+- `|k_theta|` should be comfortably larger than `|k_theta_dot|`.
+- `|k_omega|` should be **small** — a thousandth or so of `|k_theta|`. Too
+  large and the cube visibly leans away from vertical to bleed wheel speed.
+- The closed loop must be stable: `np.linalg.eigvals(A - B@K)` all with
+  negative real parts.
+
+### ⚠ The sign is not decidable here
+
+The `B` matrix above has `B[1] = −1/I_total` — the minus sign is Newton's third
+law, since the motor torque acts on the *wheel* and the body feels the
+reaction. Solved against that plant, and with `BalancingController` computing
+`tau = −(k_theta·theta + …)`, a stabilising `k_theta` comes out **negative**.
+
+That contradicts the per-field comment in `BalancingController.hpp`, which says
+to expect a positive `k_theta`. **Both are unverified.** The sign cannot be
+settled by algebra at all: what a positive `feedforward_torque` physically does
+to the cube depends on the motor phase order and `SOURCE0_SIGN`, which no model
+here can see. The magnitudes come from this solve; **the sign comes from N1** —
+wheel off, tilt by hand, watch which way the shaft pushes.
+
+When it is wrong, the fix is `EST_INVERT_THETA` (or `SOURCE0_SIGN`), **never**
+negating the control law. Flipping the law leaves the damping term pointing the
+wrong way and hides the real bug somewhere worse.
 
 ### Tuning procedure on the rig
 

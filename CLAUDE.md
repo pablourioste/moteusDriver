@@ -23,34 +23,43 @@ README.md               teaching guide -- architecture, data flow, per-file refe
 CLAUDE.md               this file
 CMakeLists.txt          build + every controller setting as a cache variable
 apps/                   entry points, one per executable
-  cube_balancer.cpp         200 Hz balancing loop
+  cube_balancer.cpp         HOST/DESK REFERENCE balancing loop, 200 Hz.
+                            NOT what runs the rig -- see below.
   direct_motor_test.cpp     motor health checks (menu or --run-all)
   imu_test.cpp              IMU validation + gyro bias calibration
   legacy_moteus_driver.cpp  pre-HAL constant-velocity driver (was main.cpp)
 include/core/           PLATFORM-AGNOSTIC control code -- no hardware headers
   Types.hpp                 ImuData, MotorState, BodyState
-  StateEstimator.hpp        SCAFFOLD: complementary filter
-  BalancingController.hpp   SCAFFOLD: LQR + safety envelope
+  StateEstimator.hpp        complementary filter
+  BalancingController.hpp   LQR feedback + safety envelope
   TelemetryFrame.hpp        118-byte binary wire format + CRC-16
   TelemetryRing.hpp         lock-free SPSC ring, O(1) push
   TelemetrySink.hpp         sink interface + drain policy (USB -> Xiao seam)
   interfaces/               IImuSensor, IMotorDriver
 tests/test_telemetry_ring.cpp  frame/ring/drain tests, no Boost, no hardware
+tests/test_control_law.cpp     estimator + safety envelope, no hardware
 tools/telemetry/        capture.py, decode.py, scale.py, live.py, analyze.ipynb
                         wifi_link_test.py  loss/jitter verdict for the Xiao hop
-include/drivers/        HARDWARE implementations of those interfaces
+tools/lqr/solve_gains.py       measurements.md -> LQR gains as build flags
+include/drivers/        LINUX HOST implementations of those interfaces
   MoteusConfig.hpp          config struct mirroring the CMake cache vars
-  MoteusDriverWrapper.hpp   moteus over CAN-FD
+  MoteusDriverWrapper.hpp   moteus over CAN-FD (fdcanusb)
   ImuDriver.hpp             BMI270 over Linux I2C
+include/embedded/       TEENSY 4.1 implementations of the same interfaces.
+                        Built only by PlatformIO -- CMake never sees these.
+  Bmi270SpiDriver.hpp       BMI270 over Teensy SPI (host ImuDriver's twin)
+  TeensyMoteusDriver.hpp    moteus over FlexCAN_T4 CAN3, polled not async
+  TeensyClock.hpp           monotonic seconds/micros for the loop scheduler
 include/testing/        MotorValidator, CsvLogger
-src/{core,drivers,testing}/ implementations mirroring include/
+src/{core,drivers,embedded,testing}/ implementations mirroring include/
 firmware/               MCU sketches, one folder per pio environment,
                         grouped by the part of the rig under test:
   teensy/                   board_check, spi_loopback, core_check
   imu/                      imu_spi_test, imu_config_upload, imu_read,
                             imu_calibrate, imu_driver_test
-  drivers/                  can_listen (moteus over CAN3)
+  drivers/                  can_listen, moteus_driver_test[_torque]
   full_case/                telemetry_test (IMU -> frame -> host)
+                            cube_balancer  <- THE RIG.  see below
   xiao/                     XIAO ESP32-C6, NOT Teensy -- these envs
                             override platform/board/framework:
                             xiao_board_check, xiao_uart_echo, xiao_softap,
@@ -58,10 +67,14 @@ firmware/               MCU sketches, one folder per pio environment,
                         env names stay FLAT: `-e imu_read`, not `-e imu/imu_read`
 config/current_config.cfg.in  board config template -> build/current_config.cfg
 data/calibration/       moteus-cal-*.log + README explaining the fields
+data/imu_calibration/   imu-cal-*.log -- the source of the GYRO_BIAS_* /
+                        ACCEL_* build flags in platformio.ini and CMakeLists
 docs/
   SETUP.md                  hardware bring-up (wiring -> calibration -> run)
   ARCHITECTURE.md           dependency graph, contracts, extension points
   3d_scaling/README.md      measurement, LQR gains, BMI270 blob, 3D extension
+  3d_scaling/measurements.md  FILL-IN worksheet: the rig's measured physical
+                            parameters.  Parsed by tools/lqr/solve_gains.py
 third_party/            bmi270_config.h (Bosch, Apache-2.0) + provenance README
 logs/                   gitignored; CSV output from direct_motor_test
 build/, moteus/, moteus-venv/   gitignored
@@ -73,27 +86,47 @@ sources, so a violation is a link error, not a review comment. `moteus.h`
 reaches exactly one translation unit (`src/drivers/MoteusDriverWrapper.cpp`);
 the header forward-declares `mjbots::moteus::Controller`.
 
-## Current state: scaffolds vs. implemented
+## Current state: what is written vs. what is measured
+
+Every module is implemented. **What is outstanding is measurement, not code.**
 
 | Module | State |
 |---|---|
 | `drivers/MoteusDriverWrapper` | implemented, verified on hardware |
 | `drivers/ImuDriver` | implemented, register map from the datasheet |
+| `embedded/Bmi270SpiDriver`, `TeensyMoteusDriver` | implemented, Teensy-only |
 | `testing/MotorValidator`, `CsvLogger` | implemented |
 | `apps/legacy_moteus_driver` | implemented |
-| `core/StateEstimator` | **SCAFFOLD** -- `update()`, `accelAngle()` are TODO |
-| `core/BalancingController` | **SCAFFOLD** -- `update()` is TODO |
+| `core/StateEstimator` | implemented -- complementary filter, 9 numbered steps |
+| `core/BalancingController` | implemented -- safety envelope + 3-term law |
+| `firmware/full_case/cube_balancer` | implemented -- state machine, entry gate |
 
-The scaffolded modules carry their full derivation as numbered `TODO(you)`
-comment blocks, and every `Config` field has a what-it-does / how-to-choose /
-TODO comment. **Do not implement these unless asked** -- the user is writing
-them deliberately, module by module, to retain control over the control law.
+**The one thing blocking a bench run is that the rig has not been measured.**
+Both `Config` structs ship every field as a `NAN`/`-1` sentinel, and both
+balancers refuse to start, naming the first unset field. Fixing that means
+filling in `docs/3d_scaling/measurements.md` and running
+`tools/lqr/solve_gains.py`, not writing code.
 
-Tunables are `NAN`/`-1` sentinels, not defaults. `isConfigured()` and
-`firstUnsetField()` gate them, and `cube_balancer` refuses to start naming the
-first unset field. This is a safety property: NaN comparisons are all false,
-so an unset `max_tilt_rad` would silently disable the e-stop rather than
-erroring.
+Sentinels rather than defaults is a safety property, not a placeholder
+convention: NaN comparisons are all false, so an unset `max_tilt_rad` would
+silently disable the tilt e-stop rather than erroring. Never "helpfully"
+supply a plausible default for one of these -- a named constant holding an
+invented number is exactly what makes it look authoritative.
+
+Every `Config` field carries a what-it-does / how-to-choose / `TODO(you)`
+comment. Those `TODO(you)`s mean *measure this*; they do not mean the
+function below is unwritten.
+
+### Which balancer is the rig
+
+`firmware/full_case/cube_balancer` (`pio run -e cube_balancer`) is what
+balances the cube. `apps/cube_balancer.cpp` is the host/desk reference and is
+**deliberately not at parity** -- the application state machine, the
+ARMED->BALANCE entry gate, the CAN grace period, observe mode and the
+gain-scale rungs exist only on the Teensy. Do not port them to the host: the
+shared safety envelope lives in `core/`, compiled by both build systems, and
+duplicating the machinery around it is how two implementations quietly stop
+agreeing.
 
 ## Build targets
 
@@ -103,14 +136,25 @@ erroring.
 | `cube_drivers` | `src/drivers/` | static lib, links `cube_core` + `moteus_lib` |
 | `direct_motor_test` | `apps/` + `testing/` | motor health checks, CSV log |
 | `imu_test` | `apps/imu_test.cpp` | BMI270 validation + bias calibration |
-| `cube_balancer` | `apps/cube_balancer.cpp` | 200 Hz balancing loop |
+| `cube_balancer` | `apps/cube_balancer.cpp` | 200 Hz loop, host reference only |
 | `moteus_driver` | `apps/legacy_moteus_driver.cpp` | constant-velocity driver |
 | `moteus_test` | upstream | Boost.Test suite for the moteus library |
 | `test_telemetry_ring` | `tests/` | frame/ring/drain tests; also `--emit` fixtures |
+| `test_control_law` | `tests/` | estimator + safety envelope, no hardware |
 
-Teensy firmware envs relevant here: `pio run -e telemetry_test` builds the
-binary-telemetry sketch. It **emits binary, not text** — opening it in a
-serial monitor shows garbage and can block the capture.
+PlatformIO envs for the rig itself:
+
+| Env | What it does |
+|---|---|
+| `cube_balancer` | the balancing loop, 400 Hz, **torque path not compiled in** |
+| `cube_balancer_torque` | same source + `-D ENABLE_BALANCER_TORQUE`; N1/N2 |
+| `telemetry_test` | IMU -> frame -> host over USB CDC |
+| `telemetry_test_uart` | same, sink swapped to `Serial1` for the Xiao |
+
+Both balancer envs **emit binary telemetry** on the primary USB serial and
+put text/commands on the second (`-D USB_DUAL_SERIAL`). Opening the primary
+port in a plain serial monitor shows garbage and can block the capture; use
+`tools/telemetry/capture.py`. Same for `telemetry_test`.
 
 ## The WiFi telemetry hop (XIAO ESP32-C6)
 
@@ -477,27 +521,48 @@ sudo ip link set up can0
 
 ## Not yet done
 
-- **Implement `StateEstimator::update()` and `accelAngle()`.** Scaffolded with
-  an 8-step derivation in the .cpp. The user is writing these.
-- **Implement `BalancingController::update()`.** Scaffolded with the safety
-  ordering and the control law.
 - **Measure the physical parameters** -- body/wheel inertia, mass, CoM
-  distance. Procedure in `docs/3d_scaling/README.md` section 3. Everything
-  downstream is blocked on this; nothing else is.
-- **Compute the LQR gains** from those measurements, section 4.
+  distance. **This is the only thing blocking a bench run.** Procedure in
+  `docs/3d_scaling/README.md` section 3; write the results into
+  `docs/3d_scaling/measurements.md`, which ships with every value as the
+  literal `nan`.
+- **Compute the LQR gains** from those measurements:
+  `./moteus-venv/bin/python tools/lqr/solve_gains.py`, which parses
+  `measurements.md` and prints paste-ready `-D CTL_K_*` flags. It refuses
+  while any value is still `nan`, and refuses if the closed loop it just
+  solved is not stable. Paste its output into `[env:cube_balancer]`.
+- **Resolve the `k_theta` sign at N1.** `docs/3d_scaling/README.md` §4's plant
+  has `B[1] = −1/I_total` (the wheel's reaction on the body), and
+  `BalancingController::update()` already negates the sum — so a stabilising
+  `k_theta` solves out **negative**, contradicting what
+  `BalancingController.hpp` used to assert. Neither claim is verified and
+  neither can be: what a positive `feedforward_torque` physically does depends
+  on the motor phase order and `SOURCE0_SIGN`. The solve fixes the magnitudes;
+  N1 fixes the sign. Record the result in `measurements.md`. **The fix for a
+  wrong sign is `EST_INVERT_THETA`, never negating the law.**
 - **Torque ceiling mismatch.** kv = 373.6 gives `K_t` = 0.0256 Nm/A, so
-  `servo.max_current_A = 15` is a real ceiling of ~0.38 Nm. Reconcile against
-  whatever `max_torque_nm` ends up being.
+  `servo.max_current_A = 15` is a real ceiling of ~0.38 Nm. The firmware now
+  reads `servo.max_current_A` back over CAN at boot and refuses to run if
+  `CTL_MAX_TORQUE_NM` exceeds what that current can actually deliver, so the
+  remaining work is choosing the number, not detecting the mismatch.
 - **Persist `servopos` to flash.** The `nan` limits are now the
   `CMakeLists.txt` default, so `moteus_driver` pushes them every run. But the
   push is volatile, and tview does *not* apply `current_config.cfg` -- after a
   power cycle, a tview-first session still sees the flashed +/-1.0 and faults
   39. Fix with `-DPERSIST_CONFIG_TO_FLASH=ON` once, or `conf write` in the
   console.
-- **Balancer telemetry logging.** `direct_motor_test` writes CSV via
-  `CsvLogger`; the balancer only prints. `CsvLogger` takes a
-  `moteus::Query::Result`, so logging `BodyState` needs an overload or a
-  parallel logger in `core/`.
+- **Host balancer telemetry logging.** The *firmware* balancer emits full
+  `TelemetryFrame` records; `apps/cube_balancer.cpp` only prints. `CsvLogger`
+  takes a `moteus::Query::Result`, so logging `BodyState` from the host needs
+  an overload or a parallel logger in `core/`. Low priority -- the rig is the
+  Teensy, and it already logs.
+
+### Deferred: the untethered WiFi path
+
+Bench bring-up (S6 → N1 → N2) runs **tethered over USB**, with the operator
+at the keyboard on the second serial port. Everything below is the phase
+after that, and none of it blocks a balancing rig:
+
 - **The Teensy control-command parser and its watchdog.** The Xiao bridge
   already delivers laptop → cube bytes onto `Serial1`; nothing on the Teensy
   reads them yet. Needs a resyncing frame parser (absolute setpoints, never
@@ -506,6 +571,11 @@ sudo ip link set up can0
 - **A control-frame wire format** for that direction. `TelemetryFrame` is
   one-way; the reverse needs its own record, and it should reuse
   `Crc16Ccitt()` rather than inventing a second checksum.
+- **A UART telemetry sink in the balancer firmware.** `cube_balancer` only has
+  a USB CDC sink, so the Xiao bridge currently receives nothing from it.
+  `telemetry_test`'s `-D TELEMETRY_SINK_UART1` path is the pattern to copy --
+  including `Serial1.addMemoryForWrite()`, without which the 64-byte default
+  TX buffer silently drops every 118-byte frame.
 
 ## Conventions
 

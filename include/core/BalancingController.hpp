@@ -1,7 +1,10 @@
 // Reaction wheel balancing control law, plus the safety envelope around it.
 //
-// STATUS: SCAFFOLD.  The safety plumbing is implemented; update() is yours.
-// See src/core/BalancingController.cpp.
+// STATUS: implemented.  The safety envelope and update() are in
+// src/core/BalancingController.cpp.  What is still outstanding is
+// MEASUREMENT, not code: every Config field below ships as a NaN/-1
+// sentinel and has to be measured or computed before anything will run.
+// See the per-field TODO(you) notes.
 //
 // THE CONTROL LAW
 //
@@ -107,10 +110,28 @@ class BalancingController {
     // WHAT IT DOES: the restoring term.  Torque proportional to how far the
     // cube has fallen.
     //
-    // HOW TO CHOOSE IT: from the LQR solve.  Expect it to be the largest of
-    // the three by a wide margin, and positive.
+    // HOW TO CHOOSE IT: from the LQR solve --
+    // `./moteus-venv/bin/python tools/lqr/solve_gains.py`.  Expect it to be
+    // the largest of the three in MAGNITUDE, by a wide margin.
     //
-    // TODO(you): compute per docs/3d_scaling/README.md section 4.
+    // ITS SIGN IS NOT SETTLED, and this comment used to claim it was.
+    // Solved against the plant in docs/3d_scaling/README.md section 4 --
+    // whose B[1] = -1/I_total is the wheel's reaction on the body, per
+    // Newton's third law -- a stabilising k_theta comes out NEGATIVE, given
+    // that update() below already negates the sum.  That is the opposite of
+    // what this comment previously asserted.
+    //
+    // Neither claim is verified, and no amount of algebra can verify
+    // either: what a positive feedforward_torque physically does to the
+    // cube depends on the motor phase order and SOURCE0_SIGN, which the
+    // model cannot see.  The solve fixes the magnitude; N1 fixes the sign
+    // (wheel off, tilt by hand, watch which way the shaft pushes).
+    //
+    // When it comes out wrong, fix EST_INVERT_THETA or SOURCE0_SIGN --
+    // NEVER the sign of the law in update().  See that function's comment.
+    //
+    // TODO(you): compute, then confirm the sign at N1 and record it in
+    // docs/3d_scaling/measurements.md.
     double k_theta = NAN;
 
     // Rate gain, Nm per rad/s.

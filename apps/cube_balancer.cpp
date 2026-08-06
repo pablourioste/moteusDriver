@@ -1,13 +1,34 @@
-// cube_balancer -- the 200 Hz reaction wheel balancing loop.
+// cube_balancer -- the host-side reaction wheel balancing loop, 200 Hz.
 //
-// Combines IImuSensor and IMotorDriver through StateEstimator and
-// BalancingController.  Everything hardware-specific lives behind those two
-// interfaces; this file is the real-time loop and the safety plumbing.
+// ---------------------------------------------------------------------
+// THIS IS NOT WHAT RUNS THE RIG.
+// ---------------------------------------------------------------------
 //
-// SAFETY: this is the only executable that commands torque from a feedback
-// law.  Read the checklist printed at startup before running it.  The gains
-// in BalancingController are placeholders and will not balance the cube --
-// see docs/3d_scaling/README.md.
+// The cube balances from the Teensy: firmware/full_case/cube_balancer,
+// `pio run -e cube_balancer` / `-e cube_balancer_torque`.  This target is
+// the HOST/DESK REFERENCE -- it runs the same core/ control law from
+// Linux over an fdcanusb, which makes it useful for exercising the loop
+// against real hardware from a machine with a debugger, a profiler and a
+// filesystem.
+//
+// It is DELIBERATELY NOT AT PARITY with the firmware, and should not be
+// brought to parity: the Teensy owns the application-layer state machine
+// (INIT/CALIB/IDLE/ARMED/BALANCE/FAULT), the ARMED->BALANCE entry gate,
+// the CAN grace period, observe mode and the gain-scale rungs.  None of
+// that is here.  Two implementations of a safety envelope is one more
+// than can be kept honest, so the envelope that matters lives in exactly
+// one place -- core/, shared by both -- and the machinery that decides
+// WHEN to trust it lives only on the rig.
+//
+// What this shares with the firmware is the part worth sharing: the call
+// sequence (query, estimate, control, command), the absolute-deadline
+// scheduler, and StateEstimator/BalancingController themselves, compiled
+// from the same sources by both build systems.
+//
+// SAFETY: this is the only HOST executable that commands torque from a
+// feedback law.  Read the checklist printed at startup before running it.
+// The gains are NaN sentinels until measured -- it refuses to start until
+// they are set.  See docs/3d_scaling/measurements.md.
 
 #include <atomic>
 #include <cmath>
@@ -225,9 +246,13 @@ int main(int argc, char** argv) {
       << "\n";
 
   if (!dry_run) {
+    // Reachable only once the NaN gate above has passed, i.e. every gain
+    // has been set to something.  That is not the same as being RIGHT --
+    // an untested LQR solve is still a number nobody has watched the rig
+    // respond to.
     std::cout
-        << "  !! The default gains are PLACEHOLDERS and will not balance the\n"
-        << "  !! cube.  Confirm before running:\n"
+        << "  !! These gains have been SET but not necessarily VALIDATED on\n"
+        << "  !! this rig.  Confirm before running:\n"
         << "  !!   * imu_test passes and theta reads ~0 when balanced\n"
         << "  !!   * direct_motor_test passes, including the watchdog check\n"
         << "  !!   * the cube is on a soft surface with nothing in its arc\n"

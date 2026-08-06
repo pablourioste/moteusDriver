@@ -22,9 +22,9 @@ StateEstimator::StateEstimator(const Config& config) : config_(config) {}
 
 // --- Configuration validation ---------------------------------------------
 //
-// Implemented, not scaffolded: this is the guard that keeps an unconfigured
-// estimator from reaching the motor, so it has to work before anything else
-// does.
+// The guard that keeps an unconfigured estimator from reaching the motor.
+// Field order here is the order the caller is asked to fix them in, so keep
+// it matching the declaration order in the header.
 
 const char* StateEstimator::firstUnsetField() const {
   if (std::isnan(config_.tau)) { return "tau"; }
@@ -45,7 +45,8 @@ bool StateEstimator::isConfigured() const {
 
 // --- Axis dispatch ---------------------------------------------------------
 //
-// Implemented: trivial selection, no judgement involved.
+// Trivial selection, no judgement involved -- it exists so the axis mapping
+// can be configuration rather than compiled-in field access.
 
 double StateEstimator::accelAxis(const ImuData& imu, int axis) {
   switch (axis) {
@@ -69,7 +70,12 @@ void StateEstimator::reset() {
   seeded_ = false;
 }
 
-// --- The parts you write ---------------------------------------------------
+// --- The filter ------------------------------------------------------------
+//
+// The numbered steps below are the derivation in StateEstimator.hpp, in
+// order.  Keep the numbering if these are edited: the header, the tests in
+// tests/test_control_law.cpp and the bring-up docs all refer to steps by
+// number.
 
 double StateEstimator::accelAngle(const ImuData& imu) const {
   // atan2, not asin: asin needs the vector normalised first and loses

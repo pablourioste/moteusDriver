@@ -5,7 +5,7 @@
 
 namespace cube {
 
-// --- Implemented: plumbing, no judgement involved --------------------------
+// --- Plumbing: no judgement involved ---------------------------------------
 
 const char* ToString(SafetyState state) {
   switch (state) {
@@ -58,16 +58,16 @@ void BalancingController::trip(SafetyState reason) {
   }
 }
 
-// --- The part you write ----------------------------------------------------
+// --- The control law -------------------------------------------------------
 
 ControlOutput BalancingController::update(const BodyState& state,
                                           const MotorState& motor,
                                           double gain_scale) {
   ControlOutput out;
 
-  // Implemented guard: an unconfigured controller must never command torque.
-  // This runs before anything else so a missing gain cannot be masked by a
-  // later check passing.
+  // An unconfigured controller must never command torque.  This runs before
+  // anything else so a missing gain cannot be masked by a later check
+  // passing.
   if (!isConfigured()) {
     out.armed = false;
     out.safety = SafetyState::kUnconfigured;
@@ -75,9 +75,9 @@ ControlOutput BalancingController::update(const BodyState& state,
     return out;
   }
 
-  // Implemented: once tripped, stay tripped.  Re-arming is a deliberate
-  // human act, so this check has to come before the control law can put the
-  // rig back into motion.
+  // Once tripped, stay tripped.  Re-arming is a deliberate human act, so
+  // this check has to come before the control law can put the rig back into
+  // motion.
   if (!armed_) {
     out.armed = false;
     out.safety = safety_;

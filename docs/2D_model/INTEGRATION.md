@@ -125,9 +125,9 @@ Ordered by how much damage they do. Each has a specific check that catches it.
 ## Scope
 
 `StateEstimator::update()`, `accelAngle()` and `BalancingController::update()` are
-deliberately user-written scaffolds, and the physical parameters and LQR gains are
-unmeasured. **This document does not implement them.** Parts I and II proceed entirely
-without them; only Part III depends on them.
+written. What remains unfinished is **measurement, not code**: the physical parameters
+and the LQR gains derived from them. Parts I and II proceed entirely without them; only
+Part III depends on them.
 
 ---
 ---
@@ -557,27 +557,45 @@ The Teensy needs only the *expected values* of the safety-critical subset
 - **The negative test:** deliberately push a wrong `servo.max_current_A` and confirm the
   Teensy **refuses to arm**. An unverified verifier is worse than none
 
-## S6 — Control loop scaffolding
+## S6 — The control loop
 
 *Depends on: S2, S4, S5 passing. Still no motor power.*
 
-Assemble the loop body: BMI270 → `StateEstimator::update()` →
-`BalancingController::update()` → `TeensyMoteusDriver::sendTorque()`, with `sendTorque()`
-still stubbed or gated behind a `--dry-run` equivalent.
+**Written.** `firmware/full_case/cube_balancer/main.cpp`, built by
+`pio run -e cube_balancer` — the default env, in which the `sendTorque()` call is not
+compiled into the image at all (it lives behind `-D ENABLE_BALANCER_TORQUE`, which only
+`cube_balancer_torque` sets). What this step now does is *run* it and take the numbers.
 
-Port the **absolute-deadline scheduler** structurally from `cube_balancer.cpp:303-313` —
-`next_deadline += period`, late-cycle counting, resync on gross overrun. Only the sleep
-call changes. With no OS scheduler competing, late cycles should be ~0%; **measure it**,
-since that number is the entire justification for this port.
+What it contains, beyond the loop body this section originally scoped:
 
-Wire the **physical e-stop** (H5) into the loop: read the GPIO every cycle, call `stop()`
-on open.
+- The loop: BMI270 → `StateEstimator::update()` → `BalancingController::update()` →
+  `TeensyMoteusDriver::sendTorque()`, query before command.
+- The **absolute-deadline scheduler**, structurally the same as
+  `apps/cube_balancer.cpp` — `next_deadline += period`, late-cycle counting, resync on
+  gross overrun. Only the sleep call differs.
+- **400 Hz, not 200.** Matched to the BMI270's configured ODR; running the loop slower
+  than the sensor only discards samples. The watchdog is a *cycle count* (20 cycles), so
+  it followed automatically to 50 ms.
+- The **application state machine** — INIT/CALIB/IDLE/ARMED/BALANCE/FAULT, the
+  ARMED→BALANCE entry gate (0.5 s dwell on tilt/rate/wheel-speed/motor health), the CAN
+  grace period, observe mode, the gain-scale rungs, and single-char operator commands.
+- The **physical e-stop** (H5), read every cycle before anything else, entering FAULT.
+- Binary `TelemetryFrame` records on the primary USB serial; text and commands on the
+  second (`-D USB_DUAL_SERIAL`).
 
 **Check S6:**
-- Loop runs at 200 Hz with >99.9% of cycles meeting deadline over 10 minutes
-- Estimator and controller report `armed=false` / `kUnconfigured` while gains are unset —
-  proving the NaN-sentinel gate survived the port
-- E-stop GPIO reads correctly and is polled every cycle
+- Loop holds 400 Hz with >99.9% of cycles meeting deadline over 10 minutes. Press `?`
+  and read `late` and `worst overrun` directly. **Measure it** — that number is the
+  entire justification for this port.
+- With the gains still unset, it must halt at *"REFUSING TO RUN: the control
+  configuration is incomplete"*, naming the first unset field. **That refusal is the
+  pass condition**, not a failure: it proves the NaN-sentinel gate survived the port.
+- The boot-time `servo.max_current_A` read-back agrees with what S5 provisioned, and the
+  torque ceiling it implies is not below `CTL_MAX_TORQUE_NM`.
+- E-stop GPIO reads correctly and is polled every cycle; opening it enters FAULT, and
+  `r` refuses to leave FAULT until it is closed again.
+- `tools/telemetry/capture.py` on the primary port decodes with no resync events while
+  state-transition text is being printed on the second.
 
 ---
 ---
@@ -586,13 +604,16 @@ on open.
 
 Both tracks meet. **This is the first time motor power is enabled.**
 
-**Blocked on:** your `StateEstimator::update()`, `accelAngle()`,
-`BalancingController::update()`, the measured physical parameters, and the LQR gains.
-Everything in Parts I and II proceeds without them.
+**Blocked on:** the measured physical parameters and the LQR gains — nothing else.
+`StateEstimator::update()`, `accelAngle()` and `BalancingController::update()` are
+written. Fill in `docs/3d_scaling/measurements.md`, run `tools/lqr/solve_gains.py`, and
+paste its output into `[env:cube_balancer]`. Everything in Parts I and II proceeds
+without any of it.
 
 ## N1 — First motion, wheel OFF
 
-*Requires: H4 (wheel physically removed), all of Part II, your control law written.*
+*Requires: H4 (wheel physically removed), all of Part II, the gains measured and pasted
+into `[env:cube_balancer]`. Build and flash `-e cube_balancer_torque`.*
 
 Enable motor power for the first time. Tilt the cube by hand; confirm the motor tries to
 spin in the **correct direction** with roughly the right magnitude.
