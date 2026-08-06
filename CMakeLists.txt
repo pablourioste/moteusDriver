@@ -142,10 +142,23 @@ set(OUTPUT_SOURCE 0 CACHE STRING "motor_position.output.source")
 set(ROTOR_TO_OUTPUT_RATIO 1.0 CACHE STRING
     "motor_position.rotor_to_output_ratio (reducer < 1.0)")
 
-# Travel limits in output rotations.  nan disables them; do that only once
-# the machine's real range is known.
-set(SERVOPOS_POSITION_MIN -1.0 CACHE STRING "servopos.position_min (nan = none)")
-set(SERVOPOS_POSITION_MAX 1.0 CACHE STRING "servopos.position_max (nan = none)")
+# Travel limits in output rotations.  nan disables them.
+#
+# nan is correct for THIS rig: the load is a reaction wheel, which must spin
+# freely through unbounded revolutions.  The former +/-1.0 default stopped the
+# wheel dead at exactly one turn -- `moteus_driver --velocity 2.0` cruised to
+# position 1.0, braked hard, and reported fault 103 (kLimitPositionBounds).
+# Worse, it then coasted to 1.004, i.e. OUTSIDE the bound, so the very next
+# position command failed up front with fault 39 (kStartOutsideLimit) and the
+# board had to be un-faulted with `d stop` before it would move at all.
+#
+# Safe here specifically because every mode this project commands is torque or
+# velocity -- position = NaN, so there is no position target for servopos to
+# bound.  The limits that matter are BalancingController's tilt e-stop and
+# torque clamp, plus servo.max_current_A below.  Restore finite values if a
+# bounded-travel joint is ever driven from this build.
+set(SERVOPOS_POSITION_MIN nan CACHE STRING "servopos.position_min (nan = none)")
+set(SERVOPOS_POSITION_MAX nan CACHE STRING "servopos.position_max (nan = none)")
 
 # Torque ceiling.  There is no safe generic default, so this starts low and
 # must be raised deliberately.  Use the LOWER of the motor's rated phase

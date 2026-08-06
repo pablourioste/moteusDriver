@@ -89,7 +89,7 @@ Flash (Windows, Teensy Loader — WSL cannot flash, the HalfKay bootloader
 enumerates as a different USB device and drops any usbipd attachment):
 
 ```
-\\wsl$\Ubuntu\home\pablo_urioste\projects\moteusDriver\.pio\build\can_listen\firmware.hex
+\\wsl.localhost\Ubuntu\home\pablo_urioste\projects\moteusDriver\.pio\build\can_listen\firmware.hex
 ```
 
 Monitor: PuTTY, **115200**, session logging on.

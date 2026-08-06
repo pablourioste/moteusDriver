@@ -37,19 +37,24 @@ include/core/           PLATFORM-AGNOSTIC control code -- no hardware headers
   interfaces/               IImuSensor, IMotorDriver
 tests/test_telemetry_ring.cpp  frame/ring/drain tests, no Boost, no hardware
 tools/telemetry/        capture.py, decode.py, scale.py, live.py, analyze.ipynb
+                        wifi_link_test.py  loss/jitter verdict for the Xiao hop
 include/drivers/        HARDWARE implementations of those interfaces
   MoteusConfig.hpp          config struct mirroring the CMake cache vars
   MoteusDriverWrapper.hpp   moteus over CAN-FD
   ImuDriver.hpp             BMI270 over Linux I2C
 include/testing/        MotorValidator, CsvLogger
 src/{core,drivers,testing}/ implementations mirroring include/
-firmware/               TEENSY sketches, one folder per pio environment,
+firmware/               MCU sketches, one folder per pio environment,
                         grouped by the part of the rig under test:
   teensy/                   board_check, spi_loopback, core_check
   imu/                      imu_spi_test, imu_config_upload, imu_read,
                             imu_calibrate, imu_driver_test
   drivers/                  can_listen (moteus over CAN3)
   full_case/                telemetry_test (IMU -> frame -> host)
+  xiao/                     XIAO ESP32-C6, NOT Teensy -- these envs
+                            override platform/board/framework:
+                            xiao_board_check, xiao_uart_echo, xiao_softap,
+                            xiao_frame_source, xiao_bridge
                         env names stay FLAT: `-e imu_read`, not `-e imu/imu_read`
 config/current_config.cfg.in  board config template -> build/current_config.cfg
 data/calibration/       moteus-cal-*.log + README explaining the fields
@@ -106,6 +111,39 @@ erroring.
 Teensy firmware envs relevant here: `pio run -e telemetry_test` builds the
 binary-telemetry sketch. It **emits binary, not text** — opening it in a
 serial monitor shows garbage and can block the capture.
+
+## The WiFi telemetry hop (XIAO ESP32-C6)
+
+Bring-up procedure and per-step checks: `docs/2D_model/XIAO_BRINGUP.md`.
+The teaching guide behind it is `docs/2D_model/WIFI_TELEMETRY_CONTROL_Cubli.md`.
+
+The Xiao envs live in the same `platformio.ini` but override
+`platform`/`board`/`framework`/`build_flags` from `[env]`, which is set up for
+the Teensy. PlatformIO scopes all of that per environment, so **nothing in
+`firmware/xiao/` can affect a Teensy build or the USB/COM capture path.**
+
+Four things about this hop are load-bearing and easy to get wrong:
+
+1. **The UART runs at 921600, not 115200.** 118 bytes × 200 Hz × 10 bits/byte
+   = 236 kbaud minimum; at the IMU's 400 Hz ODR it is 472 kbaud. 115200 carries
+   97 frames/s and does not fail cleanly — it corrupts under load. Both ends
+   must match: `UART_BAUD` in `xiao_bridge`, `kUartBaud` in `telemetry_test`.
+2. **`Serial1`'s default TX buffer on Teensy 4.x is 64 bytes, a frame is 118.**
+   `DrainTelemetry()` refuses to write unless `space() >= sizeof(frame)`, so
+   without `Serial1.addMemoryForWrite()` **not one frame is ever sent**, with no
+   error anywhere. That is why `telemetry_test_uart` allocates 4 kB explicitly.
+3. **The bridge adds no framing.** `TelemetryFrame` already carries magic,
+   length, version and CRC-16, and `decode.py` already resyncs on it. The
+   teaching guide's `[0xAA][LEN][payload][checksum]` envelope is superseded —
+   see the header comment in `firmware/xiao/xiao_bridge/main.cpp`.
+4. **The link-loss watchdog belongs on the Teensy, not the Xiao.** A fail-safe
+   on the radio module cannot fire when the radio module is what failed. Not
+   written yet.
+
+`telemetry_test` (USB CDC) and `telemetry_test_uart` (Serial1 → Xiao) are the
+same source file; the sink is swapped by `-D TELEMETRY_SINK_UART1`, which is
+`#ifdef`'d out of the default env entirely. Flash `-e telemetry_test` to get the
+COM-port capture path back, unchanged.
 
 ```bash
 cmake -S . -B build          # from project root, NOT from inside build/
@@ -232,18 +270,23 @@ The build cache currently holds the `CMakeLists.txt` defaults:
 
 | Variable | Current | Consequence for balancing |
 |---|---|---|
-| `SERVOPOS_POSITION_MIN/MAX` | `-1.0` / `1.0` | **blocks the wheel** past one revolution |
+| `SERVOPOS_POSITION_MIN/MAX` | `nan` / `nan` | correct — wheel spins unbounded |
 | `SERVO_MAX_CURRENT_A` | `15.0` | ~0.38 Nm at `K_t = 0.0256` |
 | `SERVO_MAX_VELOCITY` | `100.0` | fine |
 | `MAX_TORQUE_NM` | `0.5` | above what 15 A actually delivers |
 
-**A reaction wheel must spin freely through many revolutions**, so the ±1.0
-travel limits are wrong for `cube_balancer` and must be `nan`:
+**A reaction wheel must spin freely through many revolutions**, so the
+`servopos` defaults are `nan` in `CMakeLists.txt` — no `-D` flag needed. The
+former ±1.0 defaults produced two distinct faults on this rig, worth
+recognising because they look unrelated but are the same root cause:
 
-```bash
-cmake -S . -B build -DSERVOPOS_POSITION_MIN=nan -DSERVOPOS_POSITION_MAX=nan
-cmake --build build
-```
+| Fault | Name | When |
+|---|---|---|
+| 103 | `kLimitPositionBounds` | wheel reaches the bound mid-run; brakes hard. Not a hard fault — a limit-active code (96–105) |
+| 39 | `kStartOutsideLimit` | wheel *coasted past* the bound, so the next position command is refused before moving. Hard fault; needs `d stop` to clear |
+
+Both are cleared by `nan` limits. Per-command escape hatch if a bounded build
+is ever needed: `ignore_position_bounds`, `b1` in the `d pos` console syntax.
 
 This is safe here specifically because the balancer commands pure torque
 (`position = NaN`, `kp_scale = kd_scale = 0`) — `servopos` bounds only
@@ -445,13 +488,24 @@ sudo ip link set up can0
 - **Torque ceiling mismatch.** kv = 373.6 gives `K_t` = 0.0256 Nm/A, so
   `servo.max_current_A = 15` is a real ceiling of ~0.38 Nm. Reconcile against
   whatever `max_torque_nm` ends up being.
-- **`servopos` limits must be `nan`** for a reaction wheel -- the default
-  +/-1.0 rev would block continuous spinning. Safe because the balancer
-  commands pure torque with no position target.
+- **Persist `servopos` to flash.** The `nan` limits are now the
+  `CMakeLists.txt` default, so `moteus_driver` pushes them every run. But the
+  push is volatile, and tview does *not* apply `current_config.cfg` -- after a
+  power cycle, a tview-first session still sees the flashed +/-1.0 and faults
+  39. Fix with `-DPERSIST_CONFIG_TO_FLASH=ON` once, or `conf write` in the
+  console.
 - **Balancer telemetry logging.** `direct_motor_test` writes CSV via
   `CsvLogger`; the balancer only prints. `CsvLogger` takes a
   `moteus::Query::Result`, so logging `BodyState` needs an overload or a
   parallel logger in `core/`.
+- **The Teensy control-command parser and its watchdog.** The Xiao bridge
+  already delivers laptop → cube bytes onto `Serial1`; nothing on the Teensy
+  reads them yet. Needs a resyncing frame parser (absolute setpoints, never
+  deltas) and a ~500 ms timeout that drives a safe state on link loss.
+  `docs/2D_model/XIAO_BRINGUP.md` X5.
+- **A control-frame wire format** for that direction. `TelemetryFrame` is
+  one-way; the reverse needs its own record, and it should reuse
+  `Crc16Ccitt()` rather than inventing a second checksum.
 
 ## Conventions
 

@@ -134,8 +134,9 @@ Read this before energising anything.
    rated phase current and the board's rating.
 3. **Know your real torque ceiling.** `K_t = 60/(2π·kv)`. At kv ≈ 373.6 that is
    ~0.0256 Nm/A, so 15 A gives ≈ 0.38 Nm — *less* than `MAX_TORQUE_NM`'s 0.5.
-4. **A reaction wheel needs `servopos` limits at `nan`.** It must spin freely through
-   many revolutions; the default ±1.0 rev limits would block it.
+4. **A reaction wheel needs `servopos` limits at `nan`** — the `CMakeLists.txt`
+   default. It must spin freely through many revolutions; finite limits stop it
+   at the bound (fault 103) and then refuse to restart (fault 39).
 5. **Always `SetStop()` on exit.** Without it, Ctrl-C leaves the board holding its
    last command and drawing current.
 6. **Set `watchdog_timeout`.** If the host dies, the board stops itself.

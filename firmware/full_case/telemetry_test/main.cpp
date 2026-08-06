@@ -255,7 +255,53 @@ class UsbCdcSink : public cube::ITelemetrySink {
   const char* name() const override { return "usb_cdc"; }
 };
 
+#ifdef TELEMETRY_SINK_UART1
+
+// The Xiao seam.  Same frames, same ring, same drain policy -- only the
+// pipe underneath changes, which is precisely what ITelemetrySink exists
+// to make possible.  Built ONLY by -e telemetry_test_uart; the default
+// env compiles none of this and its USB behaviour is unchanged.
+//
+// BAUD IS 921600, NOT 115200, AND THAT IS ARITHMETIC:
+//   118 bytes x 400 Hz x 10 bits/byte (8N1) = 472 000 baud minimum.
+// 115200 carries 11.5 kB/s -- 97 frames/s, a quarter of what this sketch
+// produces.  The overflow does not announce itself; it appears as frames
+// the host cannot decode.  Keep this in step with UART_BAUD in
+// firmware/xiao/xiao_bridge/main.cpp.
+constexpr uint32_t kUartBaud = 921600;
+
+// ** THE NON-OBVIOUS ONE. **
+//
+// Serial1's default TX buffer on Teensy 4.x is SERIAL1_TX_BUFFER_SIZE = 64
+// bytes (cores/teensy4/HardwareSerial1.cpp).  A telemetry frame is 118.
+// DrainTelemetry() refuses to write unless space() >= sizeof(frame), so
+// with the stock buffer availableForWrite() never once reaches 118 and
+// NOT A SINGLE FRAME IS EVER SENT -- silently, with no error anywhere.
+// The symptom is a bridge whose uart_rx counter stays at zero while this
+// sketch looks perfectly healthy.
+//
+// addMemoryForWrite() extends the buffer; 4 kB is ~34 frames, enough to
+// absorb a burst without the drain ever seeing a full buffer.
+uint8_t g_uart_tx_buffer[4096];
+
+class Uart1Sink : public cube::ITelemetrySink {
+ public:
+  int space() override { return Serial1.availableForWrite(); }
+
+  size_t write(const uint8_t* data, size_t length) override {
+    return Serial1.write(data, length);
+  }
+
+  const char* name() const override { return "uart1_xiao"; }
+};
+
+Uart1Sink g_sink;
+
+#else
+
 UsbCdcSink g_sink;
+
+#endif  // TELEMETRY_SINK_UART1
 
 }  // namespace
 
@@ -265,6 +311,14 @@ void setup() {
                                // bytes at 400 Hz (47 kB/s) fits here but
                                // would NOT fit a real 115200 UART.
   while (!Serial && millis() < 3000) {}
+
+#ifdef TELEMETRY_SINK_UART1
+  // Extend the TX buffer BEFORE begin(), for the reason spelled out at
+  // g_uart_tx_buffer: 64 bytes < 118, so without this the drain never
+  // fires and the sketch emits nothing at all.
+  Serial1.addMemoryForWrite(g_uart_tx_buffer, sizeof(g_uart_tx_buffer));
+  Serial1.begin(kUartBaud);
+#endif
 
   pinMode(kCsPin, OUTPUT);
   digitalWrite(kCsPin, HIGH);
