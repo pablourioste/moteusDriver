@@ -156,7 +156,14 @@ constexpr double kEntryGateDwellS = 0.5;
 // one dropped CAN frame does not e-stop the rig.  Telemetry and the entry
 // gate still see the RAW reading -- only the estimator/controller inputs
 // are patched.
-constexpr int kCanGraceMisses = 3;
+//
+// This is the spec's "CAN silence: 3 consecutive missed replies" TRIP
+// threshold, not a count of tolerated misses: the 1st and 2nd misses are
+// patched, and the 3rd is passed through raw, reaching
+// BalancingController's own immediate trip on that 3rd miss.  Tune with
+// the comparison in the CAN grace block below, not just this constant, if
+// that reading of "3" is ever revisited.
+constexpr int kCanTripOnMisses = 3;
 
 // --- gain_scale -----------------------------------------------------------
 //
@@ -488,10 +495,18 @@ void handleCommand(char c) {
         Serial.println(
             "RESET refused: physical e-stop still open -- close it first.");
       } else {
-        // The only call to reset() in this file, and the only one
-        // anywhere that is not the direct result of an explicit human
-        // command -- see the pitfall in the header comment.
+        // The only call to these two reset()s in this file, and the only
+        // place either happens that is not the direct result of an
+        // explicit human command -- see the pitfall in the header
+        // comment.  StateEstimator::reset() matters here specifically:
+        // whatever happened between the trip and this moment (a fall, or
+        // someone picking the rig up and reorienting it by hand) may have
+        // put real but meaningless motion through the filter, and this
+        // forces a fresh accelerometer-seeded start from wherever the rig
+        // actually is now, per StateEstimator.hpp's own "use after an
+        // e-stop, before re-arming."
         g_controller->reset();
+        g_estimator->reset();
         transitionTo(AppState::kIdle, "operator RESET");
       }
       break;
@@ -791,7 +806,7 @@ void loop() {
 
   // --- CAN grace period ----------------------------------------------
   //
-  // See the kCanGraceMisses comment.  motor_for_controller is what the
+  // See the kCanTripOnMisses comment.  motor_for_controller is what the
   // estimator and controller see; motor_state (raw) is what telemetry and
   // the entry gate see, so a held-over reading never gets reported as
   // fresh.
@@ -802,12 +817,13 @@ void loop() {
     g_can_miss_count = 0;
   } else {
     g_can_miss_count++;
-    if (g_have_good_motor && g_can_miss_count <= kCanGraceMisses) {
+    if (g_have_good_motor && g_can_miss_count < kCanTripOnMisses) {
       motor_for_controller = g_last_good_motor;
     }
-    // else: grace exhausted (or no good reading has ever arrived) --
-    // motor_for_controller stays the raw, invalid reading, and
-    // BalancingController's own !motor.valid -> kSensorFault fires.
+    // else: grace exhausted (this is the kCanTripOnMisses-th consecutive
+    // miss, or no good reading has ever arrived) -- motor_for_controller
+    // stays the raw, invalid reading, and BalancingController's own
+    // !motor.valid -> kSensorFault fires.
   }
 
   const cube::BodyState body =
