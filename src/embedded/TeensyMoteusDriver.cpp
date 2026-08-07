@@ -24,6 +24,18 @@ FlexCAN_T4FD<CAN3, RX_SIZE_256, TX_SIZE_16> can3;
 constexpr uint32_t kArbitrationBaud = 1000000;
 constexpr uint32_t kDataBaud = 5000000;
 
+// TCAN330G transceiver mode-control pins -- same board, same pins as
+// firmware/drivers/can_listen.  Without driving these LOW, SHDN/S are left
+// floating on a Teensy GPIO: the datasheet's internal weak pull-down
+// "should not be relied upon by design" once the pin is wired to another
+// device's GPIO, so the transceiver's power-up mode is effectively
+// undetermined across boots.  This is what made S4 pass once and then
+// fail with "no reply from controller" on an unchanged bus: some boots
+// land in Normal mode, some in Shutdown/Silent.  See can_listen/main.cpp's
+// longer note on the datasheet tables behind this.
+constexpr uint8_t kPinCanShdn = 28;    // TODO(you): verify vs. schematic
+constexpr uint8_t kPinCanSilent = 29;  // TODO(you): verify vs. schematic
+
 // CAN-FD carries only these payload lengths.  A frame whose length is
 // not one of them cannot be transmitted, so short payloads are zero
 // padded UP to the next valid size.  The moteus firmware ignores
@@ -140,6 +152,14 @@ uint32_t TeensyMoteusDriver::makeArbitrationId(bool reply_required) const {
 }
 
 bool TeensyMoteusDriver::initialize(std::string* error) {
+  // Wake the TCAN330G before CAN3 ever looks at RXD.  See kPinCanShdn's
+  // comment above -- skipping this is what made this link intermittent.
+  pinMode(kPinCanShdn, OUTPUT);
+  pinMode(kPinCanSilent, OUTPUT);
+  digitalWrite(kPinCanShdn, LOW);
+  digitalWrite(kPinCanSilent, LOW);
+  delay(10);  // let the mode transition settle before CAN3 relies on RXD
+
   can3.begin();
 
   // Exact rates via CANFD_timings_t rather than a FLEXCAN_FDRATES

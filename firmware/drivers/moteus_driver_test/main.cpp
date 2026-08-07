@@ -3,9 +3,15 @@
 // Proves the Teensy can address the moteus, build a valid CAN-FD frame,
 // and parse the reply -- WITHOUT the motor being able to move.
 // sendTorque() is disarmed in this sketch and never armed; the driver
-// requires an explicit enableTorque(true) that appears nowhere here.
+// requires an explicit enableTorque(true) that appears nowhere here
+// unless ENABLE_TORQUE_TEST is defined (see the N1 block below).
 //
-//   pio run -e moteus_driver_test     (WSL) build, flash with Teensy Loader
+// The TCAN330G wake-up (SHDN/S -> LOW) now happens inside
+// TeensyMoteusDriver::initialize() itself, not here -- see the comment
+// there for why leaving it undriven made S4 pass intermittently.
+//
+//   pio run -e moteus_driver_test          (WSL) query-only, S4/S5
+//   pio run -e moteus_driver_test_torque   (WSL) adds N1's torque path
 //
 // ---------------------------------------------------------------------
 // BEFORE FLASHING

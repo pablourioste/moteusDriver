@@ -112,6 +112,14 @@ constexpr uintptr_t kCan3Base = static_cast<uintptr_t>(CAN3);
 // BIT1, BIT0, ACK, CRC, FRM, STF -- ESR1 bits 15..10.
 constexpr uint32_t kEsr1ErrorMask = 0xFC00UL;
 
+// ACK_ERR alone, bit 13.  In LISTEN_ONLY this module never drives the ACK
+// slot, and FlexCAN latches that as an ACK error on essentially every
+// frame regardless of whether the moteus itself acknowledged fine -- it
+// is a structural side effect of listening, not a bus fault.  Split out
+// so it can be reported without gating the alarm below on it.
+constexpr uint32_t kAckErrBit = 1UL << 13;
+constexpr uint32_t kRealErrorMask = kEsr1ErrorMask & ~kAckErrBit;
+
 inline uint32_t esr1() { return *(volatile uint32_t*)(kCan3Base + 0x20); }
 inline uint32_t ecr()  { return *(volatile uint32_t*)(kCan3Base + 0x1C); }
 
@@ -291,20 +299,25 @@ void loop() {
   while (can3.read(msg)) {
     g_frames++;
 
-    // Print the first frames in full, then fall back to a periodic count.
-    // Formatting every frame at 5 Mbit would overrun the serial link and
-    // make the Teensy the bottleneck rather than the bus.
-    if (g_frames <= 20) {
-      Serial.print("  ");
-      describeId(msg.id);
-      Serial.printf(" len=%u%s%s data=", msg.len, msg.brs ? " brs" : "",
-                    msg.edl ? " fd" : "");
-      for (int i = 0; i < msg.len && i < 16; i++) {
-        Serial.printf("%02X ", msg.buf[i]);
-      }
-      if (msg.len > 16) { Serial.print("..."); }
-      Serial.println();
+    // Print every frame, full payload, as it arrives.  No cap, no
+    // truncation -- this used to stop after 20 frames and fall back to a
+    // periodic count, specifically because formatting every frame at
+    // 5 Mbit can make Serial the bottleneck instead of the bus: if
+    // printing falls behind can3's mailboxes, that shows up as RX
+    // overruns in the error counters below, which then reads exactly
+    // like a wiring/termination problem.  At moteus_tool --dump-config's
+    // >1300-parameter enumeration or control-loop-rate (200 Hz+) traffic,
+    // watch g_frames' growth rate against what you expect from the host
+    // side -- falling behind is the tell that this print is now the
+    // limiting factor, not the bus.
+    Serial.print("  ");
+    describeId(msg.id);
+    Serial.printf(" len=%u%s%s data=", msg.len, msg.brs ? " brs" : "",
+                  msg.edl ? " fd" : "");
+    for (int i = 0; i < msg.len; i++) {
+      Serial.printf("%02X ", msg.buf[i]);
     }
+    Serial.println();
   }
 
   // Every 5 s: frame count and the error counters.
@@ -339,21 +352,35 @@ void loop() {
     // Reading them once here would miss almost everything: the bits are
     // write-1-to-clear and a 5 s gap between samples lets a whole error
     // burst come and go unobserved.
-    if (rx_err > 0 || tx_err > 0 || g_err_seen != 0) {
+    //
+    // THE ALARM GATES ON kRealErrorMask, NOT ON g_err_seen != 0.  ACK_ERR
+    // (see kAckErrBit above) latches on essentially every frame in
+    // LISTEN_ONLY, so folding it into the trigger meant the *** BUS
+    // ERRORS *** banner -- and its "stop and return to H3" instruction --
+    // fired every single 5 s tick on a bus with zero real errors and
+    // frames flowing cleanly.  That was a software false positive, not a
+    // hardware fault: only CRC/FRM/STF/BIT_ERR or a nonzero TX/RX error
+    // counter means the bus itself is unhealthy.
+    const uint32_t real_errors = g_err_seen & kRealErrorMask;
+    const bool ack_err_latched = (g_err_seen & kAckErrBit) != 0;
+
+    if (rx_err > 0 || tx_err > 0 || real_errors != 0) {
       Serial.println("  *** BUS ERRORS -- stop and return to H3. ***");
-      if (g_err_seen & (1UL << 12)) { Serial.println("      CRC_ERR"); }
-      if (g_err_seen & (1UL << 11)) { Serial.println("      FRM_ERR (form)"); }
-      if (g_err_seen & (1UL << 10)) { Serial.println("      STF_ERR (stuffing)"); }
-      if (g_err_seen & (3UL << 14)) { Serial.println("      BIT_ERR"); }
-      // ACK_ERR is EXPECTED here and is not a fault: in LISTEN_ONLY the
-      // peripheral never drives the bus, so it cannot acknowledge.  It is
-      // listed only so it does not look like a missing diagnosis.
-      if (g_err_seen & (1UL << 13)) {
+      if (real_errors & (1UL << 12)) { Serial.println("      CRC_ERR"); }
+      if (real_errors & (1UL << 11)) { Serial.println("      FRM_ERR (form)"); }
+      if (real_errors & (1UL << 10)) { Serial.println("      STF_ERR (stuffing)"); }
+      if (real_errors & (3UL << 14)) { Serial.println("      BIT_ERR"); }
+      if (ack_err_latched) {
         Serial.println("      ACK_ERR (expected in listen-only, ignore)");
       }
       Serial.println("  Most likely termination: check ~60 ohm across the bus.");
       Serial.println("  Wrong termination passes at 1 Mbit and fails at 5 Mbit.");
-      g_err_seen = 0;
+    } else if (ack_err_latched) {
+      // Purely the expected listen-only artifact -- nothing to act on,
+      // and nothing that should read as a diagnosis in progress.
+      Serial.println("  (ACK_ERR only, expected in listen-only -- bus is healthy)");
     }
+
+    g_err_seen = 0;
   }
 }
