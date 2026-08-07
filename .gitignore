@@ -11,11 +11,6 @@ logs/
 #   python3 -m venv moteus-venv && ./moteus-venv/bin/pip install moteus moteus-gui
 moteus-venv/
 
-# Upstream mjbots/moteus checkout.  This is a plain clone, not a submodule --
-# re-clone it rather than committing it:
-#   git clone https://github.com/mjbots/moteus.git
-moteus/
-
 # Editor and OS noise
 *.swp
 *~
